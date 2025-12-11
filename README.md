@@ -20,11 +20,10 @@ binding = "MAIL_BUCKET" # 必须与代码中的 env.MAIL_BUCKET 匹配
 bucket_name = "mail-storage-bucket" # 替换为你在上一步创建的存储桶名称
 
 # 步骤二：环境变量 (可选，但推荐)
-[vars]
-# ⚠️ 用于登录页面的 Cloudflare Turnstile 验证码，可选。
-# 如果不设置，登录将跳过验证码。
-# TURNSTILE_SITE_KEY = "你的 Site Key"
-# TURNSTILE_SECRET_KEY = "你的 Secret Key"
+## ⚠️ 用于登录页面的 Cloudflare Turnstile 验证码，可选。
+## 如果不设置，登录将跳过验证码。
+  TURNSTILE_SITE_KEY = "你的 Site Key"
+  TURNSTILE_SECRET_KEY = "你的 Secret Key"
 
 # 步骤三：配置 Email Routing 路由到 Worker
 现在您需要告诉 Cloudflare 将特定邮箱地址的邮件转发到您刚刚部署的 Worker。
