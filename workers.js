@@ -519,7 +519,7 @@ async function handleRequest(request, env, ctx) {
 
     // --- API: Check New Mail ---
     if (url.pathname === '/api/check') {
-        const list = await env.MAIL_BUCKET.list({ limit: 10 });
+        const list = await env.MAIL_BUCKET.list({ limit: 10000 });
         const emails = list.objects.filter(o => o.key !== CONFIG_FILE && !o.key.startsWith(TRASH_PREFIX));
         // Sort same as list view
         emails.sort((a, b) => {
