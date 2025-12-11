@@ -21,7 +21,7 @@ bucket_name = "mail-storage-bucket" # 替换为你在上一步创建的存储桶
 
 # 步骤二：环境变量 (可选，但推荐)
 ## ⚠️ 用于登录页面的 Cloudflare Turnstile 验证码，可选。
-## 如果不设置，登录将跳过验证码。
+##    如果不设置，登录将跳过验证码。
   TURNSTILE_SITE_KEY = "你的 Site Key"
   TURNSTILE_SECRET_KEY = "你的 Secret Key"
 
