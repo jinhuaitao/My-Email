@@ -1,10 +1,10 @@
 /**
- * Cloudflare Workers 邮箱客户端 - v11.2 (UI/UX 优化版)
+ * Cloudflare Workers 邮箱客户端 - v12.0 (终极重构解析内核版)
  * 更新内容：
- * 1. UI 布局和颜色现代化 (主色调：Indigo/Blue)
- * 2. 改进了登录页面的设计和动画效果
- * 3. 优化了邮件列表和详情页面的视觉层次和信息密度
- * 4. 保留并集成了 v11.1 的乱码修复逻辑
+ * 1. 彻底攻克 Header Folding (头部折叠) Bug：精准重组跨行 Boundary 和解码声明。
+ * 2. 引入智能 \uFFFD (菱形乱码) 嗅探器：自动捕获未声明 charset 的哑巴 GBK 邮件并强制回退解码。
+ * 3. 使用双换行 (\r\n\r\n) 的绝对标准定位 Body，免疫魔方等系统的畸形空行。
+ * 4. 彻底修复手机端过长邮件无法向下滚动的 UI 布局问题 (min-h-0 + inset-0)。
  */
 
 const CONFIG_FILE = 'sys_config.json';
@@ -27,7 +27,7 @@ const renderManifest = () => JSON.stringify({
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",
-    theme_color: "#4f46e5", // Indigo-600
+    theme_color: "#4f46e5",
     orientation: "portrait-primary",
     icons: [
         { src: "/logo.svg", sizes: "any", type: "image/svg+xml" },
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (e) => { e.respondWith(fetch(e.request)); });
 `;
 
 // ==========================================
-// 2. 核心工具函数 (保留了乱码修复逻辑)
+// 2. 核心底层解析引擎
 // ==========================================
 
 async function hashPassword(password) {
@@ -76,28 +76,27 @@ async function verifyTurnstile(token, secret, ip) {
     } catch (e) { return false; }
 }
 
-/**
- * 修复版 decodeContent: 基于字节流处理，解决多字节字符（如中文）乱码
- */
+function bufferToBinaryString(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    return binary;
+}
+
 function decodeContent(str, encoding, charset = 'utf-8') {
     if (!str) return '';
-    
-    // 1. 规范化字符集，GB2312 -> GBK 以支持更多汉字
     let label = (charset || 'utf-8').toLowerCase().trim();
     if (label === 'gb2312' || label === 'gb_2312-80') label = 'gbk';
     
-    // 2. 准备解码器
     let decoder;
-    try {
-        decoder = new TextDecoder(label);
-    } catch (e) {
-        decoder = new TextDecoder('utf-8'); // 回退
-    }
+    try { decoder = new TextDecoder(label); } 
+    catch (e) { decoder = new TextDecoder('utf-8'); }
 
     try {
         let bytes;
         if (encoding === 'base64') {
-            // Base64 -> Uint8Array
             const cleanStr = str.replace(/[\r\n\s]/g, '');
             const binaryString = atob(cleanStr);
             bytes = new Uint8Array(binaryString.length);
@@ -105,8 +104,7 @@ function decodeContent(str, encoding, charset = 'utf-8') {
                 bytes[i] = binaryString.charCodeAt(i);
             }
         } else if (encoding === 'quoted-printable' || encoding === 'quoted') {
-            // Quoted-Printable -> Uint8Array (关键修复)
-            const cleanStr = str.replace(/=\r?\n/g, ''); // 移除软换行
+            const cleanStr = str.replace(/=\r?\n/g, '');
             const buffer = [];
             for (let i = 0; i < cleanStr.length; i++) {
                 const c = cleanStr[i];
@@ -115,72 +113,122 @@ function decodeContent(str, encoding, charset = 'utf-8') {
                     if (/^[\da-fA-F]{2}$/.test(hex)) {
                         buffer.push(parseInt(hex, 16));
                         i += 2;
-                    } else {
-                        buffer.push(61); // '=' ASCII
-                    }
-                } else {
-                    buffer.push(c.charCodeAt(0));
-                }
+                    } else { buffer.push(61); }
+                } else { buffer.push(c.charCodeAt(0)); }
             }
             bytes = new Uint8Array(buffer);
         } else {
-            // Default -> Uint8Array
             bytes = new Uint8Array(str.length);
             for (let i = 0; i < str.length; i++) {
                 bytes[i] = str.charCodeAt(i);
             }
         }
         
-        return decoder.decode(bytes);
+        let decoded = decoder.decode(bytes);
+        
+        // 【核心修复】智能编码嗅探：如果 UTF-8 解出了菱形乱码(FFFD)，强行用 GBK 重新解一遍
+        if (label === 'utf-8' && decoded.includes('\uFFFD')) {
+            try {
+                const gbkDecoder = new TextDecoder('gbk');
+                const gbkDecoded = gbkDecoder.decode(bytes);
+                // 对比错误率，选错误少的
+                const utf8Errors = (decoded.match(/\uFFFD/g) || []).length;
+                const gbkErrors = (gbkDecoded.match(/\uFFFD/g) || []).length;
+                if (gbkErrors < utf8Errors) {
+                    decoded = gbkDecoded;
+                }
+            } catch (e) {}
+        }
+        return decoded;
     } catch (e) {
-        console.error('Decoding error:', e);
         return str;
     }
 }
 
-/**
- * 修复版 decodeHeaderValue: 处理 RFC 2047 分段空格
- */
 function decodeHeaderValue(text) {
     if (!text) return '';
-    
-    // RFC 2231 (filename*=utf-8''...)
     if (text.includes("''")) {
         const parts = text.split("''");
         if (parts.length === 2) { try { return decodeURIComponent(parts[1]); } catch (e) {} }
     }
-
-    // RFC 2047 (=?charset?B?content?=)
     const rfc2047Regex = /=\?([^?]+)\?([BQbq])\?([^?]+)\?=/g;
-    if (rfc2047Regex.test(text)) {
-        // 关键修复：移除分段编码之间的空格 (e.g. "=?UTF-8?B?...?= =?UTF-8?B?...?=")
+    if (text.includes('=?')) {
         const cleanText = text.replace(/\?=\s+=\?/g, '?==?');
-        return cleanText.replace(rfc2047Regex, (_, charset, type, content) => {
+        text = cleanText.replace(rfc2047Regex, (_, charset, type, content) => {
             const encoding = type.toUpperCase() === 'B' ? 'base64' : 'quoted-printable';
             return decodeContent(content, encoding, charset);
         });
+        return text;
     }
-    
     if (text.includes('%')) { try { return decodeURIComponent(text); } catch (e) {} }
     return text.replace(/^["']|["']$/g, '');
+}
+
+// 【核心修复】缝合算法：完美识别邮件头部折叠 (Header Folding)
+function parseHeaders(rawHeaderBlock) {
+    const headers = {};
+    let currentKey = null;
+    const lines = rawHeaderBlock.split(/\r?\n/);
+    
+    for (let line of lines) {
+        // 如果行首是空格或 Tab，说明它是上一行的延续 (折叠)
+        if (/^[ \t]+/.test(line)) {
+            if (currentKey) headers[currentKey] += ' ' + line.trim();
+        } else {
+            const match = line.match(/^([^:]+):\s*(.*)$/);
+            if (match) {
+                currentKey = match[1].toLowerCase();
+                headers[currentKey] = match[2].trim();
+            }
+        }
+    }
+    return headers;
+}
+
+// 【核心修复】标准的双换行切割，免疫任何虚假空行
+function splitHeaderBody(text) {
+    // 清除由于 Mbox 协议强加的 From 行
+    if (text.startsWith('From ')) {
+        text = text.replace(/^From [^\r\n]+\r?\n/, '');
+    }
+    // 安全清除多余的开头换行，防止第一行就被误判为空行
+    let cleanText = text.replace(/^[\r\n]+/, '');
+    
+    // 严格定位第一个双换行
+    const match = cleanText.match(/\r?\n\r?\n/);
+    if (match) {
+        return {
+            headerPart: cleanText.substring(0, match.index),
+            bodyPart: cleanText.substring(match.index + match[0].length)
+        };
+    }
+    
+    // 如果极端情况下没找到双换行
+    if (cleanText.includes(':')) {
+        return { headerPart: cleanText, bodyPart: '' };
+    }
+    return { headerPart: '', bodyPart: cleanText };
 }
 
 function parseMimeParts(rawText, boundary) {
     const parts = [];
     if (!boundary) return [{ headers: {}, body: rawText }];
-    const rawParts = rawText.split(`--${boundary}`);
+    
+    const safeBoundary = boundary.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+    const rawParts = rawText.split(new RegExp(`--${safeBoundary}`, 'i'));
+    
     for (const chunk of rawParts) {
-        if (chunk.trim() === '' || chunk.trim() === '--') continue;
-        const [headerPart, ...bodyParts] = chunk.split(/\r?\n\r?\n/);
-        const bodyPart = bodyParts.join('\n\n');
-        const headers = {};
-        headerPart.split(/\r?\n/).forEach(line => {
-            const match = line.match(/^([^:]+):\s*(.*)$/i);
-            if (match) headers[match[1].toLowerCase()] = match[2];
-        });
+        const trimmed = chunk.trim();
+        if (trimmed === '' || trimmed === '--') continue;
+        
+        const { headerPart, bodyPart } = splitHeaderBody(chunk);
+        const headers = parseHeaders(headerPart);
+        
         const contentType = headers['content-type'] || '';
-        const subBoundaryMatch = contentType.match(/boundary=["']?([^"';]+)/i);
+        const subBoundaryMatch = contentType.match(/boundary\s*=\s*["']?([^"';\s\r\n]+)/i);
+        
         if (subBoundaryMatch) {
+            // 递归解析多重嵌套附件
             parts.push(...parseMimeParts(bodyPart, subBoundaryMatch[1]));
         } else {
             parts.push({ headers, body: bodyPart });
@@ -190,62 +238,76 @@ function parseMimeParts(rawText, boundary) {
 }
 
 function processEmail(rawText) {
-    const [topHeaderRaw, ...rest] = rawText.split(/\r?\n\r?\n/);
-    const topBodyRaw = rest.join('\n\n');
-    const headers = {};
-    topHeaderRaw.replace(/\r?\n\s+/g, ' ').split(/\r?\n/).forEach(line => {
-        const match = line.match(/^([^:]+):\s*(.*)$/);
-        if (match) headers[match[1].toLowerCase()] = match[2];
-    });
+    const { headerPart: topHeaderRaw, bodyPart: topBodyRaw } = splitHeaderBody(rawText);
+    const headers = parseHeaders(topHeaderRaw);
+    
     if (headers['subject']) headers['subject'] = decodeHeaderValue(headers['subject']);
     if (headers['from']) headers['from'] = decodeHeaderValue(headers['from']);
 
-    const boundaryMatch = (headers['content-type'] || '').match(/boundary=["']?([^"';]+)/i);
+    const boundaryMatch = (headers['content-type'] || '').match(/boundary\s*=\s*["']?([^"';\s\r\n]+)/i);
     const boundary = boundaryMatch ? boundaryMatch[1] : null;
-    const allParts = parseMimeParts(topBodyRaw, boundary);
+    const allParts = boundary ? parseMimeParts(topBodyRaw, boundary) : [{ headers: headers, body: topBodyRaw }];
 
     let htmlBody = '';
     let textBody = '';
     const attachments = [];
 
     for (const part of allParts) {
-        const type = part.headers['content-type'] || 'text/plain';
-        const disposition = part.headers['content-disposition'] || '';
+        const rawType = part.headers['content-type'] || 'text/plain';
+        const type = rawType.toLowerCase();
+        const disposition = (part.headers['content-disposition'] || '').toLowerCase();
         const encoding = (part.headers['content-transfer-encoding'] || '').toLowerCase();
-        const charsetMatch = type.match(/charset=["']?([\w-]+)/i);
+        const charsetMatch = rawType.match(/charset\s*=\s*["']?([\w-]+)/i);
         const charset = charsetMatch ? charsetMatch[1] : 'utf-8';
         
-        // 优化文件名提取正则
-        const filenameMatch = disposition.match(/filename\*?=(?:utf-8'')?(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i) || type.match(/name=(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i);
+        const filenameMatch = disposition.match(/filename\*?=(?:utf-8'')?(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i) || rawType.match(/name\s*=\s*(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i);
+        let isAttachment = disposition.includes('attachment') || (filenameMatch && !disposition.includes('inline'));
+
+        let decodedText = decodeContent(part.body, encoding, charset);
         
-        if (disposition.includes('attachment') || filenameMatch) {
+        if (isAttachment || filenameMatch) {
             let filename = 'unknown_file';
-            if (filenameMatch) {
-                filename = filenameMatch[1] || filenameMatch[2] || filenameMatch[3] || 'unknown_file';
-            }
+            if (filenameMatch) { filename = filenameMatch[1] || filenameMatch[2] || filenameMatch[3] || 'unknown_file'; }
             filename = decodeHeaderValue(filename);
             
             const cleanBase64 = part.body.replace(/\s/g, '');
             let dataUri = '';
             if (encoding === 'base64') {
-                const mime = type.split(';')[0].trim();
+                const mime = type.split(';')[0].trim() || 'application/octet-stream';
                 dataUri = `data:${mime};base64,${cleanBase64}`;
             }
-            // 简单估算大小
             const sizeInBytes = Math.round(cleanBase64.length * 0.75);
             let sizeStr = sizeInBytes + ' B';
             if(sizeInBytes > 1024) sizeStr = Math.round(sizeInBytes/1024) + ' KB';
             if(sizeInBytes > 1024*1024) sizeStr = (sizeInBytes/(1024*1024)).toFixed(1) + ' MB';
 
-            attachments.push({ filename: filename, size: sizeStr, data: dataUri, type: type });
+            attachments.push({ filename: filename, size: sizeStr, data: dataUri, type: rawType });
+
+            // 绝望模式容错：即使标记为附件，如果没有找到正文且内容像网页或文本，强行显示
+            if (!htmlBody && !textBody && part.body.length < 500000 && decodedText.trim().length > 0 && !/\x00/.test(decodedText)) {
+                if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(decodedText)) { htmlBody = decodedText; } 
+                else { textBody = decodedText; }
+            }
         } else {
-            if (type.includes('text/html')) {
-                htmlBody = decodeContent(part.body, encoding, charset);
-            } else if (type.includes('text/plain') && !htmlBody) {
-                textBody = decodeContent(part.body, encoding, charset);
+            if (type.includes('text/html')) { 
+                htmlBody = decodedText; 
+            } else if (type.includes('text/plain') && !htmlBody) { 
+                textBody = decodedText; 
+            } else if (!htmlBody && !textBody) {
+                if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(decodedText)) { htmlBody = decodedText; } 
+                else { textBody = decodedText; }
             }
         }
     }
+    
+    // 如果系统崩溃未找到任何正文，强行猜测解码
+    if (!htmlBody && !textBody && topBodyRaw.trim().length > 0) {
+        let guessEncoding = /^[A-Za-z0-9+/=\s]{50,}$/.test(topBodyRaw.trim()) ? 'base64' : '';
+        let rawDecoded = decodeContent(topBodyRaw, guessEncoding, 'utf-8');
+        if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(rawDecoded)) { htmlBody = rawDecoded; } 
+        else { textBody = rawDecoded; }
+    }
+
     let finalBody = htmlBody || `<pre class="whitespace-pre-wrap font-sans text-gray-700">${textBody}</pre>`;
     if (!htmlBody && !textBody) finalBody = "<i>（无正文内容，请查看附件）</i>";
     return { headers, body: finalBody, attachments, date: headers['date'] };
@@ -260,7 +322,7 @@ function getAvatarColor(name) {
 }
 
 // ==========================================
-// 3. UI 渲染
+// 3. UI 渲染与滚动修复
 // ==========================================
 
 const Icons = {
@@ -316,7 +378,6 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
     <script>
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
 
-        // --- 自动刷新逻辑 ---
         const CURRENT_PAGE_LATEST_TS = ${latestTimestamp};
         if (window.location.pathname === '/' && CURRENT_PAGE_LATEST_TS > 0) {
             setInterval(async () => {
@@ -325,8 +386,6 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
                     if (res.ok) {
                         const data = await res.json();
                         if (data.latest > CURRENT_PAGE_LATEST_TS) {
-                            console.log('New mail detected, refreshing...');
-                            // 使用 smooth transition 刷新
                             const toast = document.createElement('div');
                             toast.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 p-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-600/50 z-[70] transition-opacity duration-300';
                             toast.textContent = '检测到新邮件，正在刷新...';
@@ -335,7 +394,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
                         }
                     }
                 } catch(e) {}
-            }, 15000); // 每15秒检测一次
+            }, 15000); 
         }
 
         window._confirmCallback = null;
@@ -425,7 +484,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
         }
     </script>
 </head>
-<body class="bg-gray-50 h-screen flex overflow-hidden text-gray-800">
+<body class="bg-gray-50 fixed inset-0 flex overflow-hidden text-gray-800 w-full">
     <div id="modal-backdrop" class="fixed inset-0 z-[60] hidden transition-opacity duration-200 opacity-0">
         <div class="absolute inset-0 bg-gray-900/40 backdrop-blur-sm" onclick="hideModal()"></div>
         <div class="flex items-center justify-center min-h-screen p-4">
@@ -454,7 +513,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
         </nav>
         <div class="p-4 border-t border-gray-100 safe-bottom"><a href="/logout" class="flex items-center px-3 py-3 text-base font-medium text-red-600 rounded-xl hover:bg-red-50 transition-colors"><span class="mr-3">${Icons.logout}</span>退出登录</a></div>
     </aside>
-    <main class="flex-1 flex flex-col min-w-0 bg-white md:bg-gray-50 w-full relative z-0">${content}</main>
+    <main class="flex-1 flex flex-col min-w-0 min-h-0 bg-white md:bg-gray-50 w-full relative z-0">${content}</main>
 </body></html>`;
 
 const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${error}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${siteKey}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
@@ -462,7 +521,7 @@ const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh
 const renderSetup = () => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>系统初始化</title><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-600 to-blue-700"><div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"><div class="p-8"><h1 class="text-3xl font-bold text-gray-900 mb-2">欢迎使用</h1><p class="text-gray-500 mb-8">请设置您的管理员账号以完成部署。</p><form method="POST" action="/setup" class="space-y-6"><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置用户名</label><input type="text" name="username" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="admin" required></div><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置密码</label><input type="password" name="password" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="••••••••" required></div><button class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg hover:shadow-xl active:scale-[0.98]">完成设置并登录</button></form></div></div></body></html>`;
 
 // ==========================================
-// 4. 业务逻辑
+// 4. 业务逻辑与路由
 // ==========================================
 
 async function handleRequest(request, env, ctx) {
@@ -517,11 +576,9 @@ async function handleRequest(request, env, ctx) {
     if (cookies[SESSION_NAME] !== config.sessionToken) return Response.redirect(url.origin + '/login', 302);
     if (url.pathname === '/logout') return new Response(null, { status: 302, headers: { 'Set-Cookie': `${SESSION_NAME}=; Path=/; Max-Age=0`, 'Location': '/login' }});
 
-    // --- API: Check New Mail ---
     if (url.pathname === '/api/check') {
         const list = await env.MAIL_BUCKET.list({ limit: 10000 });
         const emails = list.objects.filter(o => o.key !== CONFIG_FILE && !o.key.startsWith(TRASH_PREFIX));
-        // Sort same as list view
         emails.sort((a, b) => {
             const getTs = (k) => {
                 const parts = k.replace(TRASH_PREFIX, '').split('_');
@@ -605,9 +662,11 @@ async function handleRequest(request, env, ctx) {
         if (!obj) return Response.redirect(url.origin + '/', 302);
 
         if (!isTrash && obj.customMetadata?.isRead !== 'true') {
-            const rawTextForUpdate = await obj.text();
-            ctx.waitUntil(env.MAIL_BUCKET.put(key, rawTextForUpdate, { customMetadata: { isRead: 'true' } }));
+            const buffer = await obj.arrayBuffer(); 
+            ctx.waitUntil(env.MAIL_BUCKET.put(key, buffer, { customMetadata: { isRead: 'true' } }));
+            const rawTextForUpdate = bufferToBinaryString(buffer); 
             const email = processEmail(rawTextForUpdate);
+            
              const senderName = (email.headers['from']?.split('<')[0] || 'Unknown').trim().replace(/"/g, '');
              const senderEmail = (email.headers['from']?.match(/<([^>]+)>/) || [])[1] || '';
              const initial = senderName[0]?.toUpperCase() || '?';
@@ -639,7 +698,7 @@ async function handleRequest(request, env, ctx) {
              const html = `
              <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
                  <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm"><div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>${toolbar}</div>
-                 <div class="flex-1 overflow-y-auto custom-scrollbar"><div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
+                 <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar"><div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
                          <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${email.headers['subject'] || '(无主题)'}</h1>
                          <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6"><div class="flex items-center overflow-hidden"><div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div><div class="ml-3 sm:ml-4 min-w-0"><div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${senderName}</div><div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${senderEmail}&gt;</div></div></div><div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${new Date(obj.uploaded).toLocaleDateString('zh-CN', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</div></div>
                          ${attachmentsHtml}<div class="email-body prose prose-sm sm:prose max-w-none text-gray-800 leading-relaxed select-text pt-2 break-words">${email.body}</div>
@@ -647,8 +706,10 @@ async function handleRequest(request, env, ctx) {
              return new Response(renderLayout(html, isTrash ? 'trash' : 'inbox'), { headers: { 'Content-Type': 'text/html' } });
 
         } else {
-             const rawText = await obj.text();
+             const buffer = await obj.arrayBuffer(); 
+             const rawText = bufferToBinaryString(buffer);
              const email = processEmail(rawText);
+             
              const senderName = (email.headers['from']?.split('<')[0] || 'Unknown').trim().replace(/"/g, '');
              const senderEmail = (email.headers['from']?.match(/<([^>]+)>/) || [])[1] || '';
              const initial = senderName[0]?.toUpperCase() || '?';
@@ -680,7 +741,7 @@ async function handleRequest(request, env, ctx) {
              const html = `
              <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
                  <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm"><div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>${toolbar}</div>
-                 <div class="flex-1 overflow-y-auto custom-scrollbar"><div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
+                 <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar"><div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
                          <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${email.headers['subject'] || '(无主题)'}</h1>
                          <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6"><div class="flex items-center overflow-hidden"><div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div><div class="ml-3 sm:ml-4 min-w-0"><div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${senderName}</div><div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${senderEmail}&gt;</div></div></div><div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${new Date(obj.uploaded).toLocaleDateString('zh-CN', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</div></div>
                          ${attachmentsHtml}<div class="email-body prose prose-sm sm:prose max-w-none text-gray-800 leading-relaxed select-text pt-2 break-words">${email.body}</div>
@@ -706,16 +767,20 @@ async function handleRequest(request, env, ctx) {
         const listHtml = emails.map(e => {
             const fullKey = e.key;
             const displayKey = isTrashPage ? e.key.replace(TRASH_PREFIX, '') : e.key;
+            
             const parts = displayKey.split('_');
             const senderRaw = parts.length > 1 ? parts[1] : 'Unknown';
-            const senderName = senderRaw.includes('<') ? senderRaw.split('<')[0].replace(/"/g, '').trim() : senderRaw;
+            let senderName = senderRaw.includes('<') ? senderRaw.split('<')[0].replace(/"/g, '').trim() : senderRaw;
+            senderName = decodeHeaderValue(senderName);
+            
             const subjectRaw = parts.length > 2 ? parts.slice(2).join('_').replace('.eml', '') : displayKey;
             let subject = subjectRaw;
             try { subject = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch(e){}
+            subject = decodeHeaderValue(subject);
+            
             const color = getAvatarColor(senderName);
             const timeStr = new Date(parseInt(parts[0])).toLocaleDateString('zh-CN', {month:'short', day:'numeric'});
             
-            // Read Status Check
             const isRead = e.customMetadata?.isRead === 'true';
             const fontWeight = isRead ? 'font-normal' : 'font-semibold';
             const textColor = isRead ? 'text-gray-600' : 'text-gray-900';
@@ -744,7 +809,6 @@ async function handleRequest(request, env, ctx) {
             <button onclick="confirmBatch('mark_unread')" class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]" title="标记为未读">${Icons.unread}</button>
             <button onclick="confirmBatch('delete')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash}</button>`;
             
-        // Calculate latest timestamp for client-side polling
         let latestTimestamp = 0;
         if (emails.length > 0) {
              const parts = emails[0].key.replace(TRASH_PREFIX, '').split('_');
@@ -760,13 +824,16 @@ async function handleRequest(request, env, ctx) {
                     <div id="action-header" class="hidden flex items-center justify-between w-full"><span class="text-sm text-gray-600 font-medium whitespace-nowrap mr-2">已选 <span id="selected-count" class="text-indigo-600 font-bold">0</span></span><div class="flex items-center">${batchButtons}</div></div>
                 </div>
             </div>
-            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto custom-scrollbar bg-white safe-bottom">${emails.length > 0 ? listHtml : emptyState}</form>
+            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom">${emails.length > 0 ? listHtml : emptyState}</form>
         </div>`;
         return new Response(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp), { headers: { 'Content-Type': 'text/html' } });
     }
     return new Response("Not Found", { status: 404 });
 }
 
+// ==========================================
+// 5. Cloudflare Workers 入口 (带邮件处理)
+// ==========================================
 export default {
     async fetch(request, env, ctx) {
         try { return await handleRequest(request, env, ctx); } 
@@ -779,8 +846,16 @@ export default {
             const from = message.from || "Unknown";
             const safeSubject = subject.replace(/[\/\\:*?"<>|\r\n]/g, "_").trim().substring(0, 60);
             const key = `${Date.now()}_${from}_${safeSubject}.eml`;
-            const rawData = await new Response(message.raw).arrayBuffer();
+            
+            const rawData = await new Response(message.raw).arrayBuffer(); 
             await env.MAIL_BUCKET.put(key, rawData);
-        } catch (e) { console.error(e); }
+
+            const forwardTo = env.FORWARD_EMAIL; 
+            if (forwardTo) {
+                await message.forward(forwardTo);
+            }
+        } catch (e) { 
+            console.error("Email processing error:", e); 
+        }
     }
 };
