@@ -25,6 +25,9 @@ bucket_name = "mail-storage-bucket" # 替换为你在上一步创建的存储桶
   TURNSTILE_SITE_KEY = "你的 Site Key"
   TURNSTILE_SECRET_KEY = "你的 Secret Key"
 
+## 用于转发到其他邮箱
+FORWARD_EMAIL = "你的转发邮箱"
+
 # 步骤三：配置 Email Routing 路由到 Worker
 现在您需要告诉 Cloudflare 将特定邮箱地址的邮件转发到您刚刚部署的 Worker。
 
