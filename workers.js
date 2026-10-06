@@ -885,7 +885,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
         //    而 documentElement.scrollHeight 被视口高度托底 —— 一旦在这里加常数，
         //    就会形成「视口变高 → 测得更高 → iframe 再变高」的正反馈，
         //    表现为打开邮件后正文下方无限空白（实测 4 秒能涨 1700px 以上）。
-        //    dataset.frameHeight 做去重，避免同样的高度反复写 style。
+        //    appliedHeight 做去重，避免同样的高度反复写 style。
         //
         // ⚠️ 还有一类内容用上面的办法治不好：正文里带 vh 单位（例如 <div style="min-height:100vh">）。
         //    vh 天然绑定视口高度，而视口高度正是我们在设的值 —— 这类内容不存在不动点，

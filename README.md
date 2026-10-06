@@ -82,12 +82,13 @@ Cloudflare Email Routing ──(Send to a Worker)──▶  Worker.email()
 | 文件 | 说明 |
 | --- | --- |
 | `workers.js` | 全部业务代码：前端页面 + 邮件接收 + MIME 解析 + 路由（单文件 Worker） |
-| `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 桩 Workers AI + 直接调 `fetch` / `email()`，66 条用例覆盖登录、鉴权、XSS、沙箱、附件、批量操作、正文翻译、设置页、邮件入库与键名还原、历史数据抢救 |
+| `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 桩 Workers AI + 直接调 `fetch` / `email()`，67 条用例覆盖登录、鉴权、XSS、沙箱、附件、批量操作、正文翻译、设置页、邮件入库与键名还原、历史数据抢救、正文高度回报 |
 | `tools/render-preview.mjs` | 把初始化页与登录页渲染成静态 HTML，生成 `.preview/compare.html` 左右对比（`npm run preview`） |
+| `tools/verify-frame-height.mjs` | 用无头 Chrome 验证正文 iframe 高度自适应**不会陷入正反馈**（`npm run verify:frame`）。Node 里没有布局引擎，这类布局 bug 只能真跑浏览器才测得出来 |
 | `wrangler.jsonc` | 部署配置。**R2 自动创建 + 自动绑定**，并绑定 Workers AI |
 | `package.json` / `package-lock.json` | 依赖与脚本，锁文件保证构建可复现 |
 | `.dev.vars.example` | 本地开发变量模板（复制为 `.dev.vars`） |
-| `.github/workflows/ci.yml` | CI：语法检查 + 离线校验部署配置 |
+| `.github/workflows/ci.yml` | CI：语法检查 + 回归测试 + 离线校验部署配置 + iframe 高度收敛验证 |
 | `LICENSE` | MIT |
 
 ---
@@ -262,6 +263,7 @@ npm run dev                      # 本地跑，自动创建本地 R2（存在 .w
 | --- | --- |
 | `npm test` | 跑回归测试（**零依赖、不联网、不碰线上数据**） |
 | `npm run preview` | 渲染初始化页 / 登录页到 `.preview/compare.html`，左右对比视觉效果 |
+| `npm run verify:frame` | 用无头 Chrome 验证正文 iframe 高度自适应会收敛（需要本机有 Chrome / Edge / Chromium，没有则自动跳过） |
 | `npm run check` | **离线**校验部署配置（不需要登录、不需要账号） |
 | `npm run deploy` | 本地 CLI 部署（会把你创建的资源 ID 写回配置） |
 | `npm run tail` | 实时查看线上日志 |
@@ -320,6 +322,7 @@ env.AI                  AI
 | **开放重定向** | 批量操作的回跳目标由表单 `next` 字段给出，并**白名单校验**（只接受 `/` 与 `/trash`），不接受任意 URL |
 | **脚本块注入** | 键名会内联进详情页的 `<script>`，因此统一经 `jsonForScript()` 转义 `<` `>` `&` 与行分隔符，防止邮件主题里的 `</script>` 提前闭合脚本块 |
 | **译文注入** | 译文用 `textContent` 写入，不做 HTML 解析；翻译输入只取纯文本，HTML 邮件的标签与 script 在送模型前已被剥离 |
+| **正文高度回报** | 子页面只回报**内容容器**的高度，父页面**原样采用**（不加固定增量）。iframe 高度会决定它内部视口的高度，而 `documentElement.scrollHeight` 被视口高度托底 —— 两者一旦互相喂大就是无限空白（详见「运维与排查」） |
 
 > **重定向约定**：`Response.redirect()` 只接受**绝对 URL**，传相对路径会抛 `TypeError`。
 > 因此全站统一写成 `Response.redirect(url.origin + '/xxx', 302)`，并在测试里加了静态断言防止回归。
@@ -338,6 +341,7 @@ env.AI                  AI
 | 中文邮件乱码 | 解析内核已内置 GBK 回退：UTF-8 解出替换字符（�）时自动改用 GBK 重解，并择错误更少的结果 |
 | 列表里主题显示成 `= UTF-8 Q =F0=9F=90=9D` 这类怪东西 | 是**修复前已入库**的旧邮件。老版本写键名前做了一遍文件名清洗，把 RFC 2047 里的 `?` 换成了 `_`（`=?UTF-8?Q?xxx?=` → `=_UTF-8_Q_xxx_=`），编码标记被破坏。**新版会自动抢救**：解析旧键名时先按已知结构把编码词拼回去再解码，无需重新投递。新到的邮件则在入库时就已解码，不会再产生这个问题 |
 | 点邮件行没反应、打不开 | 老版本的点击守卫用 `closest('form')` 排除交互控件，但邮件行本身就在 `<form id="batch-form">` 里，于是整行点击被吞。已改为先把目标归到 `.email-row`，再排除 `a/button/input/label/select/textarea/iframe` |
+| 打开邮件后正文下方**无限空白** | 正文 iframe 高度自适应陷入了**正反馈**。两个错误叠加：① 子页面测的是 `documentElement.scrollHeight`，而这个值**被视口高度托底**（内容再短也返回不小于视口的值）；② 父页面又把测得值 `+8px` 设为 iframe 高度。于是「视口变高 → 测得更高 → iframe 再变高」，实测 4 秒能从 394px 涨到 2138px，最终顶到上限。**已修复**：改测内容容器 `#mail-root`（与视口无关）、父页面原样采用不加增量，并对「等幅匀速爬升」加熔断（兜住正文自带 `min-height:100vh` 这类 vh 内容）。`npm run verify:frame` 可复验 |
 | 点批量操作（已读 / 未读 / 删除）报「服务暂时不可用」 | 老版本用 `Response.redirect(request.headers.get('Referer') \|\| '/')` 回跳。但本站响应带 `Referrer-Policy: no-referrer`，浏览器**永远不发** Referer；而 `Response.redirect()` 只接受**绝对 URL**，拿到 `'/'` 会直接抛 `TypeError: Failed to parse URL from /` → 500。已改为由表单自带 `next` 字段 + 白名单校验，并用绝对 URL 重定向 |
 | 点「翻译」提示「未绑定 Workers AI」 | `wrangler.jsonc` 里的 `"ai": { "binding": "AI" }` 没生效。确认该行存在且未被注释，然后重新部署 |
 | 点「翻译」提示「暂不支持该语言」 | m2m100 固定只支持 10 种语言（英/中/法/西/阿拉伯/俄/德/日/葡/印地语），韩文等不在其中。这是模型能力边界，不是 bug |
