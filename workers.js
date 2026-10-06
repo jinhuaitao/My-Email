@@ -17,6 +17,20 @@ const SYS_PREFIX = '_sys/';
 // 应用内设置（转发邮箱、Turnstile 密钥）。放在 _sys/ 前缀下，天然不会出现在邮件列表里。
 const SETTINGS_FILE = SYS_PREFIX + 'settings.json';
 
+// 「最新邮件时间戳」标记。收信入库时顺手写一份，供前端每 15 秒的 /api/check 轮询读取。
+// 不这样做的话，轮询就得每次全量列举 R2 才能算出最新时间 —— 既慢又费操作数。
+const LATEST_FILE = SYS_PREFIX + 'latest.json';
+
+// 列表页一次翻多少页。R2 单次 list() 最多返回 1000 个键，必须靠 cursor 翻页；
+// 单页上限按 1000 算，20 页 = 最多 20000 封，足够个人邮箱，也避免异常情况下无限翻。
+const LIST_PAGE_SIZE = 1000;
+const LIST_MAX_PAGES = 20;
+
+// 列表页分页。默认 50 封，URL 上的 ?limit= 会被夹到 [50, 2000]，
+// 避免被放大成任意大的值把 Worker 拖垮。
+const PAGE_SIZE_DEFAULT = 50;
+const PAGE_SIZE_MAX = 2000;
+
 // 会话有效期（服务端校验，Cookie 的 Max-Age 只是客户端约束）
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -491,6 +505,29 @@ function isMailKey(key) {
     return key !== CONFIG_FILE && !key.startsWith(SYS_PREFIX) && !key.startsWith(TRASH_PREFIX);
 }
 
+// 翻页列举全部对象。
+//
+// ⚠️ 这里原本有一个很隐蔽、但后果严重的 bug：直接 `list({ limit: 100 })` 当列表用。
+//    R2 的 list() 是按**字典序升序**返回的，而邮件键名以时间戳开头 ——
+//    所以拿到的永远是**最旧的** 100 封。邮件一旦超过 100 封，新邮件就再也不会出现在列表里
+//    （回收站是 limit 50，同理）。它不报错、不告警，只是静静地少显示邮件。
+//    正确做法：跟着 cursor 翻到底，再自己排序截取。
+async function listAllObjects(env, { prefix = '' } = {}) {
+    const objects = [];
+    let cursor;
+    for (let page = 0; page < LIST_MAX_PAGES; page++) {
+        const opts = { limit: LIST_PAGE_SIZE, include: ['customMetadata'] };
+        if (prefix) opts.prefix = prefix;
+        if (cursor) opts.cursor = cursor;
+        const res = await env.MAIL_BUCKET.list(opts);
+        for (const o of (res && res.objects) || []) objects.push(o);
+        // 没截断、或拿不到 cursor 就收工（桩实现可能不返回 cursor）
+        if (!res || !res.truncated || !res.cursor) break;
+        cursor = res.cursor;
+    }
+    return objects;
+}
+
 // 按字符数截断，且不把代理对（emoji 等）从中间切开 —— 切开会变成孤立代理，
 // 落盘后就成了 U+FFFD，反而制造乱码。
 function clampText(value, max) {
@@ -734,10 +771,17 @@ const Icons = {
     read: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" /></svg>`,
     unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`,
     gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`,
-    translate: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`
+    translate: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`,
+    search: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" /></svg>`,
+    key: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>`
 };
 
-const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
+const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0, opts = {}) => {
+    const unreadCount = Number(opts.unreadCount) || 0;
+    const unreadBadge = unreadCount > 0
+        ? `<span class="ml-auto min-w-[1.5rem] h-6 px-2 flex items-center justify-center rounded-full bg-indigo-600 text-white text-xs font-semibold">${unreadCount > 999 ? '999+' : unreadCount}</span>`
+        : '';
+    return `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -772,6 +816,28 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
     </style>
     <script>
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
+
+        // 时间一律在客户端按**用户本地时区**格式化。
+        // 不能在 Worker 里用 toLocaleDateString —— Workers 运行时是 UTC，
+        // 中国用户看到的日期会整整差 8 小时（早上 7 点收到的邮件会显示成前一天）。
+        function formatTs(ts, full) {
+            const d = new Date(ts);
+            const now = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            const hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+            if (full) return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
+            if (d.toDateString() === now.toDateString()) return hm;
+            if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+            return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+        }
+        function hydrateTimes() {
+            const nodes = document.querySelectorAll('time[data-ts]');
+            for (const el of nodes) {
+                const ts = parseInt(el.getAttribute('data-ts'), 10);
+                if (ts > 0) el.textContent = formatTs(ts, el.getAttribute('data-fmt') === 'full');
+            }
+        }
+        document.addEventListener('DOMContentLoaded', hydrateTimes);
 
         const CURRENT_PAGE_LATEST_TS = ${latestTimestamp};
         if (window.location.pathname === '/' && CURRENT_PAGE_LATEST_TS > 0) {
@@ -970,7 +1036,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
             <button onclick="toggleMenu()" class="md:hidden text-gray-500"><svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
         <nav class="flex-1 p-4 space-y-1 overflow-y-auto">
-            <a href="/" class="sidebar-link ${activePage === 'inbox' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'inbox' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.inbox}</span>收件箱</a>
+            <a href="/" class="sidebar-link ${activePage === 'inbox' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'inbox' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.inbox}</span>收件箱${unreadBadge}</a>
             <a href="/trash" class="sidebar-link ${activePage === 'trash' ? 'active bg-red-50 text-red-700' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'trash' ? 'text-red-600' : 'text-gray-400 group-hover:text-red-500'}">${Icons.trash}</span>已删除</a>
             <a href="/settings" class="sidebar-link ${activePage === 'settings' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'settings' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.gear}</span>设置</a>
         </nav>
@@ -978,6 +1044,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
     </aside>
     <main class="flex-1 flex flex-col min-w-0 min-h-0 bg-white md:bg-gray-50 w-full relative z-0">${content}</main>
 </body></html>`;
+};
 
 const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="current-password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
 
@@ -1166,6 +1233,28 @@ function renderSettings(settings, turnstile, forward, opts) {
                     </div>
                 </form>
 
+                <form method="POST" action="/settings/password" class="space-y-4 border border-gray-200 rounded-xl p-5">
+                    <div>
+                        <h2 class="font-semibold text-gray-900 mb-1">修改密码</h2>
+                        <p class="text-xs text-gray-500">更新后<b class="text-gray-700">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">当前密码</label>
+                            <input type="password" name="current_password" autocomplete="current-password" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">新密码</label>
+                            <input type="password" name="new_password" autocomplete="new-password" minlength="8" required placeholder="至少 8 位" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">确认新密码</label>
+                            <input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                        </div>
+                    </div>
+                    <button type="submit" class="px-5 py-3 bg-gray-900 text-white rounded-xl font-semibold hover:bg-gray-800 active:scale-[0.98] transition-all">更新密码</button>
+                </form>
+
                 <section class="border border-red-100 bg-red-50/40 rounded-xl p-5">
                     <h2 class="font-semibold text-gray-900 mb-1">危险操作</h2>
                     <p class="text-xs text-gray-500 mb-3">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
@@ -1271,10 +1360,8 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
     const initial = escapeHtml((senderName[0] || '?').toUpperCase());
     const avatarColor = getAvatarColor(senderName);
     const subject = email.headers['subject'] || '(无主题)';
-    const uploadedAt = new Date(uploaded);
-    const dateStr = Number.isNaN(uploadedAt.getTime())
-        ? ''
-        : uploadedAt.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const uploadedTs = new Date(uploaded).getTime();
+    const uploadedIso = Number.isFinite(uploadedTs) ? new Date(uploadedTs).toISOString() : '';
     const encodedKey = encodeURIComponent(key);
 
     // 只有正文里**确实**含有可执行内容（脚本 / 内联事件 / javascript: URL）时才提示一句。
@@ -1309,9 +1396,14 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
     const translateBtn = `
             <button id="translate-btn" onclick="translateMail()" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="把正文翻译成中文">${Icons.translate} <span class="ml-1">翻译</span></button>`;
 
+    // 下载原始邮件。归档备份、喂给别的客户端、排障看真实头部都用得上。
+    const rawBtn = `
+            <a href="/raw/${encodedKey}" download class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="下载原始邮件（.eml）">${Icons.download}<span class="ml-1 hidden sm:inline">原文</span></a>`;
+
     const toolbar = isTrash ? `
         <div class="flex items-center space-x-1 sm:space-x-2">
             ${translateBtn}
+            ${rawBtn}
             <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
                 <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
             </form>
@@ -1321,6 +1413,7 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
         </div>` : `
         <div class="flex items-center space-x-1 sm:space-x-2">
             ${translateBtn}
+            ${rawBtn}
             <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${escapeAttr(key)}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>
         </div>`;
 
@@ -1341,7 +1434,7 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                             <div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${escapeHtml(senderEmail)}&gt;</div>
                         </div>
                     </div>
-                    <div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${escapeHtml(dateStr)}</div>
+                    <div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1"><time data-ts="${Number.isFinite(uploadedTs) ? uploadedTs : 0}" data-fmt="full" datetime="${escapeAttr(uploadedIso)}"></time></div>
                 </div>
                 ${attachmentsHtml}
                 <div id="translate-status" class="hidden"></div>
@@ -1537,12 +1630,23 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/api/check') {
-        const list = await env.MAIL_BUCKET.list({ limit: 10000 });
+        // 这个接口每 15 秒被轮询一次，绝不能在这里做全量列举 ——
+        // 收信时已经把一个轻量标记对象写好了，直接读它即可（一次 GET）。
         let latest = 0;
-        for (const item of list.objects) {
-            if (!isMailKey(item.key)) continue;
-            const ts = keyTimestamp(item.key);
-            if (ts > latest) latest = ts;
+        try {
+            const marker = await env.MAIL_BUCKET.get(LATEST_FILE);
+            if (marker) latest = Number(JSON.parse(await marker.text()).ts) || 0;
+        } catch (e) {
+            latest = 0;
+        }
+        if (!latest) {
+            // 标记缺失（老部署刚升级上来、或标记写入曾失败）时退回列举。
+            // 这种情况只持续到下一封新邮件到达为止，之后就一直走上面的快路径。
+            for (const item of await listAllObjects(env)) {
+                if (!isMailKey(item.key)) continue;
+                const ts = keyTimestamp(item.key);
+                if (ts > latest) latest = ts;
+            }
         }
         return jsonResponse({ latest: latest });
     }
@@ -1650,7 +1754,9 @@ async function handleRequest(request, env, ctx) {
 
         const notice = url.searchParams.get('saved')
             ? '设置已保存。'
-            : (url.searchParams.get('cleared') ? 'Turnstile 密钥已清空。' : '');
+            : (url.searchParams.get('cleared')
+                ? 'Turnstile 密钥已清空。'
+                : (url.searchParams.get('pwchanged') ? '密码已更新，其它设备上的登录已失效。' : ''));
 
         return htmlResponse(renderLayout(
             renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice }),
@@ -1665,6 +1771,43 @@ async function handleRequest(request, env, ctx) {
         delete next.turnstileSecretKey;
         await putSettings(env, next);
         return Response.redirect(url.origin + '/settings?cleared=1', 302);
+    }
+
+    // ---------- 修改密码 ----------
+    // 以前想改密码只能删掉 sys_config.json 重新初始化 —— 那会连带清掉全部配置和会话，太糙了。
+    if (url.pathname === '/settings/password' && method === 'POST') {
+        const settings = await getSettings(env);
+        const back = (opts, status) => htmlResponse(renderLayout(
+            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), opts),
+            'settings'
+        ), status);
+
+        const fd = await request.formData();
+        const currentPwd = String(fd.get('current_password') || '');
+        const newPwd = String(fd.get('new_password') || '');
+        const confirmPwd = String(fd.get('confirm_password') || '');
+
+        if (!await verifyPassword(config, currentPwd)) return back({ error: '当前密码不正确。' }, 400);
+        if (newPwd.length < 8) return back({ error: '新密码至少需要 8 位。' }, 400);
+        if (newPwd !== confirmPwd) return back({ error: '两次输入的新密码不一致。' }, 400);
+        if (newPwd === currentPwd) return back({ error: '新密码不能与当前密码相同。' }, 400);
+
+        // 重新加盐 + **轮换会话 token**：改密码的常见诉求之一就是「把其它设备踢下线」。
+        // 轮换后别的设备上的旧 Cookie 立刻失效；当前这台用响应里下发的新 Cookie 续上，无需重新登录。
+        const salt = randomHex(16);
+        config.salt = salt;
+        config.password = await hashPassword(newPwd, salt);
+        config.sessionToken = randomHex(32);
+        config.sessionExpires = Date.now() + SESSION_TTL_MS;
+        await env.MAIL_BUCKET.put(CONFIG_FILE, JSON.stringify(config), { httpMetadata: { contentType: 'application/json' } });
+
+        return new Response(null, {
+            status: 302,
+            headers: Object.assign({}, BASE_HEADERS, {
+                'Set-Cookie': SESSION_NAME + '=' + config.sessionToken + '; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
+                'Location': '/settings?pwchanged=1'
+            })
+        });
     }
 
     if (url.pathname === '/delete' && method === 'POST') {
@@ -1777,6 +1920,25 @@ async function handleRequest(request, env, ctx) {
         });
     }
 
+    // 下载原始邮件（.eml）。归档备份、喂给别的邮件客户端、排障看真实头部都用得上。
+    if (url.pathname.startsWith('/raw/')) {
+        const resolved = await resolveEmailKey(env, safeDecode(url.pathname.slice('/raw/'.length)));
+        if (!resolved) return textResponse('Not Found', 404);
+
+        const safeName = resolved.key.replace(TRASH_PREFIX, '').replace(/[\r\n"]/g, '_').replace(/\.eml$/i, '') + '.eml';
+        const asciiName = safeName.replace(/[^\x20-\x7e]/g, '_');
+        const encodedName = encodeURIComponent(safeName).replace(/'/g, '%27');
+        return new Response(await resolved.obj.arrayBuffer(), {
+            headers: Object.assign({}, BASE_HEADERS, {
+                // message/rfc822 是 .eml 的标准类型；配 attachment + nosniff，
+                // 浏览器只会下载、绝不会当成页面渲染。
+                'Content-Type': 'message/rfc822',
+                'Content-Disposition': 'attachment; filename="' + asciiName + '"; filename*=UTF-8\'\'' + encodedName,
+                'Cache-Control': 'private, max-age=300'
+            })
+        });
+    }
+
     if (url.pathname.startsWith('/email/')) {
         const resolved = await resolveEmailKey(env, safeDecode(url.pathname.slice('/email/'.length)));
         if (!resolved) return Response.redirect(url.origin + '/', 302);
@@ -1796,16 +1958,40 @@ async function handleRequest(request, env, ctx) {
 
     const isTrashPage = url.pathname === '/trash';
     if (url.pathname === '/' || isTrashPage) {
-        const options = isTrashPage ? { prefix: TRASH_PREFIX, limit: 50, include: ['customMetadata'] } : { limit: 100, include: ['customMetadata'] };
-        const list = await env.MAIL_BUCKET.list(options);
-        // 排除配置文件与内部系统键（登录限流计数等），回收站页用 prefix 天然隔离
-        const emails = list.objects.filter(o => isTrashPage ? true : isMailKey(o.key));
-
+        // 翻页取全量、再排序截取 —— 直接 list({ limit: N }) 拿到的是**最旧的** N 封，
+        // 邮件一多新邮件就再也不显示了（详见 listAllObjects 上的说明）。
+        const all = await listAllObjects(env, { prefix: isTrashPage ? TRASH_PREFIX : '' });
+        const emails = isTrashPage ? all : all.filter(o => isMailKey(o.key));
         emails.sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
 
-        const listHtml = emails.map(e => {
+        const displayKeyOf = o => (isTrashPage ? o.key.replace(TRASH_PREFIX, '') : o.key);
+
+        // 搜索：只匹配主题与发件人。键名里存的就是入库时解码好的明文，
+        // 不用读正文，所以成本基本为零。
+        const query = (url.searchParams.get('q') || '').trim().slice(0, 100);
+        const needle = query.toLowerCase();
+        const matched = needle
+            ? emails.filter(o => {
+                const meta = parseKeyMeta(displayKeyOf(o));
+                return meta.from.toLowerCase().includes(needle) || meta.subject.toLowerCase().includes(needle);
+            })
+            : emails;
+
+        // 分页：夹在 [50, 2000]，避免 ?limit= 被放大成任意值
+        const requested = parseInt(url.searchParams.get('limit') || '', 10);
+        const pageSize = Number.isFinite(requested)
+            ? Math.min(Math.max(requested, PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX)
+            : PAGE_SIZE_DEFAULT;
+        const shown = matched.slice(0, pageSize);
+        const nextSize = Math.min(pageSize * 2, PAGE_SIZE_MAX);
+        const hasMore = matched.length > shown.length;
+
+        // 未读计数（侧栏徽标）。已取到全量 metadata，顺手算出来，不额外开销。
+        const unreadCount = isTrashPage ? 0 : emails.filter(o => o.customMetadata?.isRead !== 'true').length;
+
+        const listHtml = shown.map(e => {
             const fullKey = e.key;
-            const displayKey = isTrashPage ? e.key.replace(TRASH_PREFIX, '') : e.key;
+            const displayKey = displayKeyOf(e);
 
             const meta = parseKeyMeta(displayKey);
             const senderName = (meta.from.includes('<')
@@ -1815,7 +2001,6 @@ async function handleRequest(request, env, ctx) {
 
             const color = getAvatarColor(senderName);
             const ts = keyTimestamp(displayKey);
-            const timeStr = ts > 0 ? new Date(ts).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) : '';
 
             const isRead = e.customMetadata?.isRead === 'true';
             const fontWeight = isRead ? 'font-normal' : 'font-semibold';
@@ -1833,13 +2018,13 @@ async function handleRequest(request, env, ctx) {
                     <div class="min-w-0 flex-1 flex flex-col justify-center">
                         <div class="flex justify-between items-baseline mb-1">
                             <p class="text-sm sm:text-base ${fontWeight} text-gray-900 truncate mr-2">${dotHtml}${escapeHtml(senderName)}</p>
-                            <p class="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">${escapeHtml(timeStr)}</p>
+                            <time class="text-xs text-gray-400 whitespace-nowrap flex-shrink-0" data-ts="${ts}" datetime="${ts > 0 ? escapeAttr(new Date(ts).toISOString()) : ''}"></time>
                         </div>
                         <p class="text-sm ${textColor} truncate leading-snug"><span class="${fontWeight}">${escapeHtml(subject)}</span></p>
                     </div>
                 </div></div>`;
         }).join('');
-        const emptyState = `<div class="flex flex-col items-center justify-center h-full text-center p-8 mt-20"><div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-4">${isTrashPage ? Icons.trash : Icons.inbox}</div><h3 class="text-gray-900 font-medium text-lg">${isTrashPage ? '回收站是空的' : '暂无邮件'}</h3><p class="text-sm text-gray-500">${isTrashPage ? '被删除的邮件将在此处保留' : '您的收件箱空空如也'}</p></div>`;
+        const emptyState = `<div class="flex flex-col items-center justify-center text-center p-8 mt-20"><div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-4">${query ? Icons.search : (isTrashPage ? Icons.trash : Icons.inbox)}</div><h3 class="text-gray-900 font-medium text-lg">${query ? '没有匹配的邮件' : (isTrashPage ? '回收站是空的' : '暂无邮件')}</h3><p class="text-sm text-gray-500">${query ? '换个关键词试试。搜索范围是主题与发件人' : (isTrashPage ? '被删除的邮件将在此处保留' : '您的收件箱空空如也')}</p></div>`;
         
         const batchButtons = isTrashPage ? `
             <button onclick="confirmBatch('restore')" class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]">${Icons.refresh} <span class="ml-1 hidden sm:inline">恢复</span></button>
@@ -1847,8 +2032,31 @@ async function handleRequest(request, env, ctx) {
             <button onclick="confirmBatch('mark_read')" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium mr-1 whitespace-nowrap transition active:scale-[0.98]" title="标记为已读">${Icons.read}</button>
             <button onclick="confirmBatch('mark_unread')" class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]" title="标记为未读">${Icons.unread}</button>
             <button onclick="confirmBatch('delete')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash}</button>`;
-            
+
         const latestTimestamp = emails.length > 0 ? keyTimestamp(emails[0].key) : 0;
+
+        const searchAction = isTrashPage ? '/trash' : '/';
+        const searchBar = `
+            <form method="GET" action="${searchAction}" class="px-3 sm:px-6 py-2.5 border-b border-gray-100 bg-white shrink-0 flex items-center gap-2">
+                <div class="relative flex-1 min-w-0">
+                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400 pointer-events-none">${Icons.search}</span>
+                    <input type="search" name="q" value="${escapeAttr(query)}" autocomplete="off" placeholder="搜索主题或发件人" class="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                </div>
+                <button type="submit" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors active:scale-[0.98]">搜索</button>
+                ${query ? `<a href="${searchAction}" class="px-3 py-2 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-100 transition-colors">清除</a>` : ''}
+            </form>`;
+
+        const countLine = query
+            ? `找到 ${matched.length} 封匹配「${query}」的邮件`
+            : `共 ${emails.length} 封邮件`;
+        const shownLine = hasMore ? `，当前显示最新 ${shown.length} 封` : '';
+
+        // 「加载更多」用 URL 递进而不是一次渲染全部：
+        // 邮件上千封时把 DOM 全铺出来会明显卡顿，而分页的成本几乎为零。
+        const nextHref = searchAction + '?limit=' + nextSize + (query ? '&q=' + encodeURIComponent(query) : '');
+        const footer = !hasMore ? '' : (nextSize > pageSize
+            ? `<div class="px-4 py-5 text-center"><a href="${escapeAttr(nextHref)}" class="inline-block px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">加载更多（还有 ${matched.length - shown.length} 封）</a></div>`
+            : `<div class="px-4 py-5 text-center text-xs text-gray-400">仅显示前 ${PAGE_SIZE_MAX} 封，请用搜索缩小范围</div>`);
 
         const html = `
         <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
@@ -1859,9 +2067,10 @@ async function handleRequest(request, env, ctx) {
                     <div id="action-header" class="hidden flex items-center justify-between w-full"><span class="text-sm text-gray-600 font-medium whitespace-nowrap mr-2">已选 <span id="selected-count" class="text-indigo-600 font-bold">0</span></span><div class="flex items-center">${batchButtons}</div></div>
                 </div>
             </div>
-            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom"><input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}">${emails.length > 0 ? listHtml : emptyState}</form>
+            ${searchBar}
+            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom"><input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}"><div class="px-3 sm:px-6 py-2 text-xs text-gray-400 border-b border-gray-50 bg-white">${escapeHtml(countLine + shownLine)}</div>${shown.length > 0 ? listHtml : emptyState}${footer}</form>
         </div>`;
-        return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp));
+        return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp, { unreadCount: unreadCount }));
     }
     return textResponse('Not Found', 404);
 }
@@ -1908,11 +2117,19 @@ export default {
         // 万一被中间层还原就会把 /email/<key> 的路径切坏。
         const keyFrom = from.replace(/[\/\\]/g, '-');
         const keySubject = subject.replace(/[\/\\]/g, '-');
-        const key = Date.now() + '_' + keyFrom.length + '_' + keyFrom + keySubject + '.eml';
+        const now = Date.now();
+        const key = now + '_' + keyFrom.length + '_' + keyFrom + keySubject + '.eml';
 
         try {
             const rawData = await new Response(message.raw).arrayBuffer();
             await env.MAIL_BUCKET.put(key, rawData, { customMetadata: { isRead: 'false' } });
+            // 更新「最新邮件」标记，供前端每 15 秒的轮询直接读取（避免全量列举）。
+            // 与键名用同一个 now，保证页面里的 CURRENT_PAGE_LATEST_TS 与它可直接比较。
+            try {
+                await env.MAIL_BUCKET.put(LATEST_FILE, JSON.stringify({ ts: now }), { httpMetadata: { contentType: 'application/json' } });
+            } catch (e) {
+                console.error('Failed to update latest marker:', e && e.stack ? e.stack : e);
+            }
         } catch (e) {
             // 入库失败必须留下日志，否则邮件会静默丢失
             console.error('Failed to store email:', e && e.stack ? e.stack : e);
