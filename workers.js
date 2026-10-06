@@ -1367,13 +1367,24 @@ async function handleRequest(request, env, ctx) {
                     const obj = await env.MAIL_BUCKET.get(key);
                     if (obj) {
                         await env.MAIL_BUCKET.put(key, obj.body, {
-                            customMetadata: { isRead: action === 'mark_read' ? 'true' : 'false' }
+                            customMetadata: Object.assign({}, obj.customMetadata, {
+                                isRead: action === 'mark_read' ? 'true' : 'false'
+                            })
                         });
                     }
                 }
             }
         }
-        return Response.redirect(request.headers.get('Referer') || '/', 302);
+
+        // 批量操作完成后回到用户刚才所在的页面（收件箱 / 回收站）。
+        //
+        // 这里不能用 Referer：
+        //   1) 本站所有响应都带 Referrer-Policy: no-referrer，浏览器压根不会发 Referer；
+        //   2) Response.redirect() 只接受**绝对 URL**，传相对路径会直接抛
+        //      TypeError: Failed to parse URL from / —— 那就是「服务暂时不可用」的根因。
+        // 改为由表单自带 next 字段，并做白名单校验，顺带杜绝开放重定向。
+        const next = String(fd.get('next') || '').indexOf('/trash') === 0 ? '/trash' : '/';
+        return Response.redirect(url.origin + next, 302);
     }
 
     if (url.pathname.startsWith('/frame/')) {
@@ -1500,7 +1511,7 @@ async function handleRequest(request, env, ctx) {
                     <div id="action-header" class="hidden flex items-center justify-between w-full"><span class="text-sm text-gray-600 font-medium whitespace-nowrap mr-2">已选 <span id="selected-count" class="text-indigo-600 font-bold">0</span></span><div class="flex items-center">${batchButtons}</div></div>
                 </div>
             </div>
-            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom">${emails.length > 0 ? listHtml : emptyState}</form>
+            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom"><input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}">${emails.length > 0 ? listHtml : emptyState}</form>
         </div>`;
         return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp));
     }

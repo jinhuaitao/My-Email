@@ -80,7 +80,7 @@ Cloudflare Email Routing ──(Send to a Worker)──▶  Worker.email()
 | 文件 | 说明 |
 | --- | --- |
 | `workers.js` | 全部业务代码：前端页面 + 邮件接收 + MIME 解析 + 路由（单文件 Worker） |
-| `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 直接调 `fetch` / `email()`，51 条用例覆盖登录、鉴权、XSS、沙箱、附件、设置页、邮件入库与键名还原、历史数据抢救 |
+| `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 直接调 `fetch` / `email()`，56 条用例覆盖登录、鉴权、XSS、沙箱、附件、批量操作、设置页、邮件入库与键名还原、历史数据抢救 |
 | `tools/render-preview.mjs` | 把初始化页与登录页渲染成静态 HTML，生成 `.preview/compare.html` 左右对比（`npm run preview`） |
 | `wrangler.jsonc` | 部署配置。**R2 自动创建 + 自动绑定**，并绑定 Workers AI |
 | `package.json` / `package-lock.json` | 依赖与脚本，锁文件保证构建可复现 |
@@ -283,6 +283,11 @@ env.AI                  AI
 | **信息泄漏** | 未捕获异常只写日志，不把堆栈回显给客户端；页面统一 `no-store` + `noindex` |
 | **搜索引擎收录** | 全站 `X-Robots-Tag: noindex`，并提供 `robots.txt` 拒绝抓取 |
 | **点击劫持** | 页面响应带 `X-Frame-Options: DENY`（正文 iframe 单独用 `SAMEORIGIN`） |
+| **开放重定向** | 批量操作的回跳目标由表单 `next` 字段给出，并**白名单校验**（只接受 `/` 与 `/trash`），不接受任意 URL |
+
+> **重定向约定**：`Response.redirect()` 只接受**绝对 URL**，传相对路径会抛 `TypeError`。
+> 因此全站统一写成 `Response.redirect(url.origin + '/xxx', 302)`，并在测试里加了静态断言防止回归。
+> 另外不要把 `Referer` 当回跳依据 —— 本站带 `Referrer-Policy: no-referrer`，浏览器根本不会发它。
 
 ---
 
@@ -297,6 +302,7 @@ env.AI                  AI
 | 中文邮件乱码 | 解析内核已内置 GBK 回退：UTF-8 解出替换字符（�）时自动改用 GBK 重解，并择错误更少的结果 |
 | 列表里主题显示成 `= UTF-8 Q =F0=9F=90=9D` 这类怪东西 | 是**修复前已入库**的旧邮件。老版本写键名前做了一遍文件名清洗，把 RFC 2047 里的 `?` 换成了 `_`（`=?UTF-8?Q?xxx?=` → `=_UTF-8_Q_xxx_=`），编码标记被破坏。**新版会自动抢救**：解析旧键名时先按已知结构把编码词拼回去再解码，无需重新投递。新到的邮件则在入库时就已解码，不会再产生这个问题 |
 | 点邮件行没反应、打不开 | 老版本的点击守卫用 `closest('form')` 排除交互控件，但邮件行本身就在 `<form id="batch-form">` 里，于是整行点击被吞。已改为先把目标归到 `.email-row`，再排除 `a/button/input/label/select/textarea/iframe` |
+| 点批量操作（已读 / 未读 / 删除）报「服务暂时不可用」 | 老版本用 `Response.redirect(request.headers.get('Referer') \|\| '/')` 回跳。但本站响应带 `Referrer-Policy: no-referrer`，浏览器**永远不发** Referer；而 `Response.redirect()` 只接受**绝对 URL**，拿到 `'/'` 会直接抛 `TypeError: Failed to parse URL from /` → 500。已改为由表单自带 `next` 字段 + 白名单校验，并用绝对 URL 重定向 |
 | 邮件正文被当成附件 | 极少数畸形邮件。解析器有「绝望模式」容错，会把疑似正文的附件内容强行显示出来 |
 | 忘记管理员密码 | 删除 R2 中的 `sys_config.json`，重新访问站点即回到初始化页面（**注意：会一并清掉会话**） |
 | 想改成单文件版本 | 把 `workers.js` 改名为 `_worker.js` 放进 Cloudflare Pages 的静态目录即可 |
