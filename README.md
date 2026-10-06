@@ -311,6 +311,7 @@ env.AI                  AI
 | **邮件内容 XSS** | 主题、发件人、附件名等完全由发件人控制，渲染前统一 `escapeHtml()` |
 | **点击行 XSS** | 不再把键名拼进 `onclick` 字符串（`encodeURIComponent` **不转义单引号**），改为 `data-key` + 事件委托 |
 | **正文脚本执行** | 正文在不透明源 iframe 中渲染（`sandbox` 属性 + CSP `sandbox`），并额外剥离 `<script>` 与内联 `on*` 事件 |
+| **剥离提示** | 只有当正文里**确实**含有脚本 / 内联事件 / `javascript:` URL 时，才在正文下方给出一行说明。普通邮件不留任何多余文字 —— 常驻一句「已剥离脚本」对 99% 的邮件毫无信息量，而且「已被剥离」的措辞容易被读成「邮件坏了」 |
 | **附件类型混淆** | `text/html` / `image/svg+xml` 等危险 MIME 一律降级为 `application/octet-stream` + `Content-Disposition: attachment` |
 | **口令存储** | 加盐 SHA-256（每账号 16 字节随机盐），并兼容早期无盐数据 |
 | **口令比对** | 常量时间 `safeEqual`，避免逐字符提前返回泄漏前缀信息 |
