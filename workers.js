@@ -265,6 +265,33 @@ function decodeContent(str, encoding, charset = 'utf-8') {
     }
 }
 
+// 抢救「被文件名清洗毁掉的 RFC2047 编码词」。
+//
+// 老版本在把主题 / 发件人写进 R2 键名之前，先做了一遍「文件名安全清洗」，
+// 而清洗会把 "?" 换成 "_" —— 于是标准编码词
+//     =?UTF-8?Q?=F0=9F=90=9D?=
+// 被毁成
+//     =_UTF-8_Q_=F0=9F=90=9D_=
+// 编码标记（=? ? ?=）丢失，列表页再也解不回来，只能原样显示成
+//     "= UTF-8 Q =F0=9F=90=9D"
+// 这就是「有些邮件主题乱码」在历史数据里的表现。
+//
+// 好消息是这个破坏是「可逆的结构性替换」：字符集、编码类型、编码内容三段都还在，
+// 只是分隔符从 "?" 变成了 "_"。这里按已知结构还原回标准形式，
+// 再交给 decodeHeaderValue 解码，让修复前入库的老邮件也能正常显示，不必等重新投递。
+//
+// 结构：=_<charset>_<B|Q>_<content>_=?
+//   charset 不含 "_"（UTF-8 / ISO-8859-1 / GB2312 / windows-1252 …）
+//   content 不含 "_"（base64 字母表是 A-Za-z0-9+/=，quoted-printable 是 =XX）
+// 这两点保证了 "_" 可以安全地当作分隔符来切分。
+function salvageBrokenRfc2047(text) {
+    if (!text || text.indexOf('=_') === -1) return text;
+    return text.replace(
+        /=_([A-Za-z0-9][A-Za-z0-9.*-]*)_([BbQq])_([A-Za-z0-9+/=]+)_=?/g,
+        (_, charset, type, content) => '=?' + charset + '?' + type.toUpperCase() + '?' + content + '?='
+    );
+}
+
 function decodeHeaderValue(text) {
     if (!text) return '';
     if (text.includes("''")) {
@@ -470,7 +497,11 @@ function clampText(value, max) {
 //   发件人与主题在入库时就已经解码成明文，这里直接用，不再二次解码。
 //
 // v1（历史数据）：<时间戳>_<发件人>_<主题>.eml
-//   只能尽力还原；主题若含 "_" 或当年被 sanitize 破坏过，就还原不回来了。
+//   老版本在写键名前做了一遍文件名清洗，把 "?" 换成了 "_"，
+//   所以这里要先 salvageBrokenRfc2047() 把被毁的编码词拼回去，再按 "_" 切分。
+//   顺序不能反：一旦先把 "_" 当空格替换掉，编码标记就永远回不来了。
+//   抢救过后仍有歧义的地方（主题本身含 "_"、被清洗掉的问号等）只能尽力而为，
+//   但都只影响列表页的文字，正文与附件不受影响。
 function parseKeyMeta(displayKey) {
     const m = /^(\d+)_(\d+)_/.exec(displayKey);
     if (m) {
@@ -484,11 +515,41 @@ function parseKeyMeta(displayKey) {
         }
     }
 
-    const parts = displayKey.split('_');
-    const fromRaw = parts.length > 1 ? parts[1] : '';
-    let subjectRaw = parts.length > 2 ? parts.slice(2).join('_').replace(/\.eml$/i, '') : displayKey;
+    let rest = displayKey.replace(/^\d+_/, '').replace(/\.eml$/i, '');
+    rest = salvageBrokenRfc2047(rest);
+    const split = splitV1Key(rest);
+    let subjectRaw = split.subject;
     try { subjectRaw = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch (e) {}
-    return { from: decodeHeaderValue(fromRaw), subject: decodeHeaderValue(subjectRaw) };
+    return { from: decodeHeaderValue(split.from), subject: decodeHeaderValue(subjectRaw) };
+}
+
+// 在 v1 键名里切出「发件人 / 主题」。
+//
+// 不能简单按第一个 "_" 切：老清洗把 "<" ">" 也换成了 "_"，
+// 带显示名的发件人 `张三 <a@b.com>` 会变成 `=_…?= _a@b.com_`，
+// 按第一个 "_" 切就会把地址错当成主题开头。
+//
+// 这里以第一个 "@" 为锚点定位地址边界，地址之后的第一个 "_" 才是真正的分界；
+// 显示名部分按 `Name <addr>` 重建，好让列表页能正常取出显示名。
+function splitV1Key(rest) {
+    const at = rest.indexOf('@');
+    if (at !== -1) {
+        let s = at;
+        while (s > 0 && /[A-Za-z0-9._%+-]/.test(rest[s - 1])) s--;
+        let e = at + 1;
+        while (e < rest.length && /[A-Za-z0-9.-]/.test(rest[e])) e++;
+        const addr = rest.slice(s, e);
+        const name = rest.slice(0, s).replace(/_+$/, '').trim();
+        let j = e;
+        while (j < rest.length && rest[j] === '_') j++;
+        return {
+            from: name ? name + ' <' + addr + '>' : addr,
+            subject: rest.slice(j)
+        };
+    }
+    const sep = rest.indexOf('_');
+    if (sep === -1) return { from: '', subject: rest };
+    return { from: rest.slice(0, sep), subject: rest.slice(sep + 1) };
 }
 
 // decodeURIComponent 遇到畸形百分号编码会抛 URIError，包一层避免整个请求 500。
