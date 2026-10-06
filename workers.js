@@ -63,31 +63,448 @@ const TRANSLATE_MAX_CHUNKS = 6;
 // 1. PWA & UI 资源
 // ==========================================
 
+// ---------- 品牌资产 ----------
+//
+// 登录页、初始化页、侧栏共用同一枚标记（一个信封），
+// 避免「首次部署」与「日常登录」看起来像两个不同的产品。
+// 图标本身是纯 SVG，不依赖任何图标字体或外部 CDN。
+
+function brandMark(cls) {
+    return '<svg viewBox="0 0 40 40" class="' + (cls || 'brand-mark') + '" aria-hidden="true" focusable="false">'
+        + '<defs><linearGradient id="cfmailMark" x1="0" y1="0" x2="1" y2="1">'
+        + '<stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#4338ca"/>'
+        + '</linearGradient></defs>'
+        + '<rect width="40" height="40" rx="12" fill="url(#cfmailMark)"/>'
+        + '<rect x="8" y="11" width="24" height="18.5" rx="3.6" fill="#ffffff" opacity="0.96"/>'
+        + '<path d="M9.6 13.4l9.2 7.2c0.7 0.55 1.7 0.55 2.4 0l9.2-7.2" fill="none" stroke="#4338ca" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        + '</svg>';
+}
+
+// 复选框里的对勾。它必须能被 CSS 染色，所以不写死颜色。
+const CHECK_MARK = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+
+// 样式表的版本号。改动 APP_CSS 时把它 +1，
+// 页面引用的 /app.css?v=N 随之变化，浏览器就不会继续用旧缓存。
+const UI_VERSION = 1;
+
+// ---------- 设计系统 ----------
+//
+// 为什么不用 Tailwind CDN / Google Fonts：
+//   1) cdn.tailwindcss.com 官方明确标注「仅供原型，不要用于生产」，且体积上百 KB；
+//   2) 这两个域名在中国大陆网络下经常不可达，页面会长时间白屏或掉字体；
+//   3) 邮件客户端最怕「首屏样式没到」——登录框裸露在屏幕上是最不专业的观感。
+// 因此这里改成一份自包含的样式表：只写这个应用真正用到的组件，
+// 体积约为 Tailwind 运行时的 1/20，且通过 /app.css?v=N 长缓存分发。
+//
+// 主题：所有颜色都走 CSS 变量，:root 是浅色，[data-theme="dark"] 覆盖成深色。
+// 由 <head> 里的内联脚本在首帧之前把 data-theme 写到 <html> 上，所以不会闪一下白底。
+const APP_CSS = `
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --r-xs:6px;--r-sm:9px;--r-md:12px;--r-lg:16px;--r-xl:22px;--r-full:999px;
+  --sidebar-w:264px;--tabbar-h:58px;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --t-fast:.14s var(--ease);--t:.22s var(--ease);
+  color-scheme:light;
+  --bg:#f4f5f7;
+  --surface:#ffffff;
+  --surface-2:#fafbfc;
+  --surface-3:#f1f3f5;
+  --border:#e7e9ee;
+  --border-2:#d7dae1;
+  --text:#0f172a;
+  --text-2:#4b5563;
+  --text-3:#67707f;
+  --text-4:#8b93a3;
+  --accent:#4f46e5;--accent-h:#4338ca;--accent-fg:#ffffff;
+  --accent-soft:#eef2ff;--accent-soft-2:#e0e7ff;
+  --danger:#dc2626;--danger-h:#b91c1c;--danger-fg:#ffffff;--danger-soft:#fef2f2;--danger-bd:#fbd5d5;
+  --success:#047857;--success-fg:#ffffff;--success-soft:#ecfdf5;--success-bd:#c7f0e0;
+  --warn:#b45309;--warn-soft:#fffbeb;--warn-bd:#fde9c8;
+  --ring:0 0 0 3.5px rgba(79,70,229,.18);
+  --sh-1:0 1px 2px rgba(15,23,42,.06);
+  --sh-2:0 2px 6px rgba(15,23,42,.05),0 10px 26px -14px rgba(15,23,42,.18);
+  --sh-3:0 24px 60px -18px rgba(15,23,42,.34);
+  --scrim:rgba(15,23,42,.42);
+  --hover:#f7f8fa;
+  --sel:#eef2ff;
+}
+[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0d0f14;
+  --surface:#151821;
+  --surface-2:#1b1f29;
+  --surface-3:#222732;
+  --border:#272c38;
+  --border-2:#3a4150;
+  --text:#e9ecf3;
+  --text-2:#b6bdcb;
+  --text-3:#98a1b3;
+  --text-4:#7b8496;
+  --accent:#818cf8;--accent-h:#a5b4fc;--accent-fg:#0d0f14;
+  --accent-soft:#1e2136;--accent-soft-2:#2b3050;
+  --danger:#f87171;--danger-h:#fca5a5;--danger-fg:#1a0f0f;--danger-soft:#2a1a1c;--danger-bd:#4d272b;
+  --success:#34d399;--success-fg:#04150f;--success-soft:#12271f;--success-bd:#1f4b39;
+  --warn:#fbbf24;--warn-soft:#2a2213;--warn-bd:#4d3c17;
+  --ring:0 0 0 3.5px rgba(129,140,248,.28);
+  --sh-1:0 1px 2px rgba(0,0,0,.45);
+  --sh-2:0 2px 6px rgba(0,0,0,.4),0 12px 32px -16px rgba(0,0,0,.7);
+  --sh-3:0 24px 60px -18px rgba(0,0,0,.8);
+  --scrim:rgba(0,0,0,.62);
+  --hover:#1c212c;
+  --sel:#242a45;
+}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+h1,h2,h3,h4,p,figure{margin:0}
+a{color:var(--accent);text-decoration:none}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0;padding:0}
+img{max-width:100%}
+[hidden]{display:none!important}
+*{scrollbar-width:thin;scrollbar-color:var(--border-2) transparent}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:99px;border:3.5px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--text-4);background-clip:content-box}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.skip-link{position:fixed;top:8px;left:8px;z-index:100;transform:translateY(-200%);background:var(--surface);color:var(--text);padding:10px 16px;border-radius:var(--r-sm);box-shadow:var(--sh-2);font-size:13.5px;font-weight:600;transition:transform var(--t)}
+.skip-link:focus{transform:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.ic{width:20px;height:20px;flex:none;display:block}
+.spin{animation:cfspin .8s linear infinite}
+@keyframes cfspin{to{transform:rotate(360deg)}}
+@keyframes cffade{from{opacity:0}}
+@keyframes cfpop{from{opacity:0;transform:translateY(8px) scale(.97)}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+}
+.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grow{flex:1;min-width:0}
+.mono{font-family:var(--mono);font-size:.94em}
+.muted{color:var(--text-3)}
+// 按钮里的文字标签：窄屏（手机）只留图标，宽屏才把文字放出来。
+// 名字容易写反 —— 旧名 .only-sm 读起来像「只在小屏显示」，实际是反过来（大屏才显示）。
+.lbl-wide{display:none}
+@media (min-width:640px){.lbl-wide{display:inline}}
+
+/* ---------- 应用外壳 ---------- */
+.app{display:flex;height:100vh;height:100dvh;overflow:hidden}
+.sidebar{width:var(--sidebar-w);flex:none;display:none;flex-direction:column;background:var(--surface);border-right:1px solid var(--border);min-height:0}
+@media (min-width:900px){.sidebar{display:flex}}
+.main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;position:relative}
+@media (min-width:900px){.main{padding:18px 18px 18px 0}}
+@media (max-width:899px){.main{padding-bottom:calc(var(--tabbar-h) + env(safe-area-inset-bottom))}}
+.panel{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--surface);overflow:hidden}
+@media (min-width:900px){.panel{border-radius:var(--r-lg);border:1px solid var(--border);box-shadow:var(--sh-1)}}
+.brand{display:flex;align-items:center;gap:11px;padding:0 18px;height:64px;border-bottom:1px solid var(--border);flex:none}
+.brand-mark{width:34px;height:34px;flex:none;border-radius:10px}
+.brand-name{font-size:16px;font-weight:650;letter-spacing:-.01em;line-height:1.2}
+.brand-sub{font-size:11px;color:var(--text-3)}
+.nav{padding:10px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;flex:1;min-height:0}
+.nav-item{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:var(--r-sm);color:var(--text-2);font-size:14.5px;font-weight:500;position:relative;transition:background var(--t-fast),color var(--t-fast)}
+.nav-item:hover{background:var(--hover);color:var(--text)}
+.nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:650}
+.nav-item.active::before{content:"";position:absolute;left:-10px;top:50%;transform:translateY(-50%);width:3px;height:18px;border-radius:0 3px 3px 0;background:var(--accent)}
+.nav-item.danger.active{background:var(--danger-soft);color:var(--danger)}
+.nav-item.danger.active::before{background:var(--danger)}
+.nav-item.logout{color:var(--danger)}
+.nav-item.logout:hover{background:var(--danger-soft);color:var(--danger)}
+.nav-badge{margin-left:auto;min-width:22px;height:20px;padding:0 7px;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--r-full);background:var(--accent);color:var(--accent-fg);font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.nav-foot{padding:10px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:10px;flex:none}
+.nav-foot-label{font-size:11px;font-weight:650;color:var(--text-4);letter-spacing:.04em;padding:0 3px}
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;background:var(--surface);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom);height:calc(var(--tabbar-h) + env(safe-area-inset-bottom))}
+@media (min-width:900px){.tabbar{display:none}}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10.5px;font-weight:600;color:var(--text-3);position:relative;text-decoration:none}
+.tab.active{color:var(--accent)}
+.tab-badge{position:absolute;top:5px;left:50%;margin-left:5px;min-width:16px;height:16px;padding:0 4px;border-radius:var(--r-full);background:var(--accent);color:var(--accent-fg);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+
+/* ---------- 顶栏 ---------- */
+.topbar{flex:none;display:flex;align-items:center;gap:9px;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--surface);min-height:60px;z-index:20}
+@media (min-width:640px){.topbar{padding:10px 18px;min-height:64px}}
+.topbar h1{font-size:17px;font-weight:650;letter-spacing:-.01em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar-actions{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
+@media (max-width:639px){.topbar.selecting h1{display:none}}
+.sel-count{font-size:13px;color:var(--text-2);white-space:nowrap}
+.sel-count b{color:var(--accent);font-weight:700}
+
+/* ---------- 按钮 ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 13px;border-radius:var(--r-sm);font-size:13.5px;font-weight:600;border:1px solid transparent;white-space:nowrap;transition:background var(--t-fast),border-color var(--t-fast),color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast)}
+.btn:active{transform:scale(.975)}
+.btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
+.btn.primary{background:var(--accent);color:var(--accent-fg);box-shadow:0 1px 2px rgba(15,23,42,.12)}
+.btn.primary:hover{background:var(--accent-h)}
+.btn.danger{background:var(--danger);color:var(--danger-fg)}
+.btn.danger:hover{background:var(--danger-h)}
+.btn.ghost{background:transparent;color:var(--text-2);border-color:var(--border-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--text)}
+.btn.soft{background:var(--accent-soft);color:var(--accent)}
+.btn.soft:hover{background:var(--accent-soft-2)}
+.btn.danger-soft{background:var(--danger-soft);color:var(--danger)}
+.btn.danger-soft:hover{box-shadow:inset 0 0 0 1px var(--danger-bd)}
+.btn.ok-soft{background:var(--success-soft);color:var(--success)}
+.btn.ok-soft:hover{box-shadow:inset 0 0 0 1px var(--success-bd)}
+.btn.solid-dark{background:var(--text);color:var(--surface)}
+.btn.solid-dark:hover{opacity:.88}
+.btn.block{width:100%}
+.btn.lg{padding:12px 18px;font-size:15px;border-radius:var(--r-md)}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:var(--r-sm);color:var(--text-3);flex:none;transition:background var(--t-fast),color var(--t-fast),transform var(--t-fast)}
+.iconbtn:hover{background:var(--hover);color:var(--text)}
+.iconbtn:active{transform:scale(.94)}
+.iconbtn.danger:hover{background:var(--danger-soft);color:var(--danger)}
+
+/* ---------- 表单 ---------- */
+.stack{display:flex;flex-direction:column;gap:16px}
+.stack.tight{gap:12px}
+.settings-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.pw-grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:700px){.pw-grid{grid-template-columns:1fr 1fr 1fr}}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.label{font-size:12.5px;font-weight:650;color:var(--text-2)}
+.input{width:100%;padding:11px 13px;background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--r-sm);font-size:14.5px;transition:border-color var(--t-fast),box-shadow var(--t-fast),background var(--t-fast)}
+.input::placeholder{color:var(--text-4)}
+.input:hover{border-color:var(--text-4)}
+.input:focus{outline:none;background:var(--surface);border-color:var(--accent);box-shadow:var(--ring)}
+.input-wrap{position:relative;display:flex;align-items:center}
+.input-wrap .lead{position:absolute;left:12px;color:var(--text-4);pointer-events:none;display:flex}
+.input-wrap .input.has-lead{padding-left:41px}
+.input-wrap .trail{position:absolute;right:5px;display:flex}
+.input-wrap .trail .iconbtn{width:30px;height:30px}
+.hint{font-size:12px;color:var(--text-3);line-height:1.55}
+.hint.warn{color:var(--warn)}
+.hint.bad{color:var(--danger)}
+.hint.ok{color:var(--success)}
+
+/* ---------- 卡片 / 徽章 / 提示条 ---------- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:16px}
+.card-danger{border-color:var(--danger-bd)}
+.card-head{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-bottom:5px}
+.card-head h2{font-size:14.5px;font-weight:650}
+.card-desc{font-size:12.5px;color:var(--text-3);line-height:1.65;margin-bottom:12px}
+.card-desc:last-child{margin-bottom:0}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2.5px 8px;border-radius:var(--r-xs);border:1px solid var(--border);font-size:11.5px;font-weight:650;white-space:nowrap;background:var(--surface-3);color:var(--text-3)}
+.badge.ok{background:var(--success-soft);color:var(--success);border-color:var(--success-bd)}
+.badge.info{background:var(--accent-soft);color:var(--accent);border-color:var(--accent-soft-2)}
+.badge.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn-bd)}
+.badge .ic{width:14px;height:14px}
+.alert{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:var(--r-sm);font-size:13.5px;line-height:1.6;border:1px solid;margin-bottom:16px}
+.alert:last-child{margin-bottom:0}
+.alert .ic{margin-top:1px;width:18px;height:18px}
+.alert.error{background:var(--danger-soft);color:var(--danger);border-color:var(--danger-bd)}
+.alert.ok{background:var(--success-soft);color:var(--success);border-color:var(--success-bd)}
+.alert.info{background:var(--accent-soft);color:var(--accent);border-color:var(--accent-soft-2)}
+.alert.plain{background:var(--surface-3);color:var(--text-2);border-color:var(--border)}
+.note{display:flex;gap:8px;margin-top:12px;padding:10px 12px;border-radius:var(--r-sm);background:var(--surface-3);color:var(--text-3);font-size:12.5px;line-height:1.65}
+.seg{display:flex;gap:2px;padding:3px;background:var(--surface-3);border-radius:var(--r-sm)}
+.seg-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 6px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--text-3);transition:background var(--t-fast),color var(--t-fast),box-shadow var(--t-fast)}
+.seg-btn:hover{color:var(--text)}
+.seg-btn[aria-pressed="true"]{background:var(--surface);color:var(--text);box-shadow:var(--sh-1)}
+.avatar{display:inline-flex;align-items:center;justify-content:center;border-radius:var(--r-full);color:#fff;font-weight:650;letter-spacing:.02em;flex:none;user-select:none}
+.avatar.md{width:40px;height:40px;font-size:15px}
+.avatar.lg{width:46px;height:46px;font-size:17px}
+.av-0{background:linear-gradient(140deg,#6366f1,#4338ca)}
+.av-1{background:linear-gradient(140deg,#f97316,#ea580c)}
+.av-2{background:linear-gradient(140deg,#0ea5e9,#0369a1)}
+.av-3{background:linear-gradient(140deg,#10b981,#047857)}
+.av-4{background:linear-gradient(140deg,#ec4899,#be185d)}
+.av-5{background:linear-gradient(140deg,#8b5cf6,#6d28d9)}
+.av-6{background:linear-gradient(140deg,#14b8a6,#0f766e)}
+.av-7{background:linear-gradient(140deg,#f59e0b,#b45309)}
+
+/* ---------- 搜索 ---------- */
+.searchbar{flex:none;display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);background:var(--surface)}
+@media (min-width:640px){.searchbar{padding:10px 18px}}
+.searchbar .input-wrap{flex:1;min-width:0}
+.searchbar .input{padding:9px 12px 9px 38px;font-size:14px;border-radius:var(--r-sm)}
+.searchbar .lead{left:11px}
+kbd{font-family:var(--mono);font-size:11px;padding:1.5px 5px;border-radius:5px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text-3)}
+
+/* ---------- 邮件列表 ---------- */
+.listwrap{flex:1;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;background:var(--surface);-webkit-overflow-scrolling:touch}
+.rowlist-meta{padding:8px 12px;font-size:11.5px;color:var(--text-3);border-bottom:1px solid var(--border);background:var(--surface-2)}
+@media (min-width:640px){.rowlist-meta{padding:8px 18px}}
+.daysep{position:sticky;top:0;z-index:5;padding:7px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11.5px;font-weight:700;color:var(--text-3);letter-spacing:.02em}
+@media (min-width:640px){.daysep{padding:7px 18px}}
+.row{position:relative;display:flex;align-items:center;gap:12px;padding:11px 12px 11px 0;border-bottom:1px solid var(--border);cursor:pointer;background:var(--surface);transition:background var(--t-fast)}
+@media (min-width:640px){.row{padding:13px 18px 13px 0}}
+.row:hover{background:var(--hover)}
+.row.sel{background:var(--sel)}
+.row.unread::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+.row-check{flex:none;display:flex;padding:0 2px 0 12px}
+@media (min-width:640px){.row-check{padding-left:18px}}
+.check{position:relative;display:inline-flex;width:18px;height:18px;flex:none}
+.check input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1}
+.check .box{width:18px;height:18px;border:1.5px solid var(--border-2);border-radius:5px;background:var(--surface);display:flex;align-items:center;justify-content:center;transition:background var(--t-fast),border-color var(--t-fast),box-shadow var(--t-fast)}
+.check .box svg{width:12px;height:12px;stroke:var(--accent-fg);stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.check input:checked+.box{background:var(--accent);border-color:var(--accent)}
+.check input:checked+.box svg{opacity:1}
+.check input:indeterminate+.box{background:var(--accent);border-color:var(--accent)}
+.check input:focus-visible+.box{box-shadow:var(--ring)}
+.row-body{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.row-top{display:flex;align-items:baseline;gap:10px}
+.row-from{font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.row.unread .row-from{font-weight:650}
+.row-time{font-size:11.5px;color:var(--text-3);white-space:nowrap;flex:none;font-variant-numeric:tabular-nums}
+.row-subj{font-size:13.5px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row.unread .row-subj{color:var(--text)}
+.dot{width:7px;height:7px;border-radius:var(--r-full);background:var(--accent);display:inline-block;margin-right:7px;vertical-align:1px}
+.row-acts{flex:none;display:flex;align-items:center;gap:1px;opacity:0;transition:opacity var(--t-fast)}
+.row:hover .row-acts,.row:focus-within .row-acts{opacity:1}
+@media (hover:none){.row-acts{display:none}}
+.loadmore{padding:18px;text-align:center}
+
+/* ---------- 空状态 ---------- */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 24px;gap:3px}
+.empty-ic{width:60px;height:60px;border-radius:var(--r-full);display:flex;align-items:center;justify-content:center;background:var(--surface-3);color:var(--text-4);margin-bottom:10px}
+.empty-ic .ic{width:26px;height:26px}
+.empty h3{font-size:15px;font-weight:650}
+.empty p{font-size:13px;color:var(--text-3);max-width:32em;line-height:1.6}
+
+/* ---------- 邮件详情 ---------- */
+.doc{flex:1;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;background:var(--surface)}
+.doc-inner{max-width:860px;margin:0 auto;padding:20px 16px 44px}
+@media (min-width:640px){.doc-inner{padding:26px 32px 56px}}
+.subject{font-size:21px;font-weight:700;line-height:1.35;letter-spacing:-.015em;word-break:break-word}
+@media (min-width:640px){.subject{font-size:26px}}
+.sender{display:flex;align-items:flex-start;gap:12px;padding:16px 0 18px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.sender-name{font-size:14px;font-weight:650}
+.sender-mail{display:flex;align-items:center;gap:2px;font-size:12.5px;color:var(--text-3);min-width:0}
+.sender-mail a{color:var(--text-3);word-break:break-all}
+.sender-mail a:hover{color:var(--accent)}
+.sender-mail .iconbtn{width:26px;height:26px}
+.sender-mail .iconbtn .ic{width:15px;height:15px}
+.sender-time{font-size:12px;color:var(--text-3);white-space:nowrap;margin-left:auto;padding-top:2px;font-variant-numeric:tabular-nums}
+.attach{border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-bottom:20px}
+.attach-head{display:flex;align-items:center;gap:8px;padding:10px 13px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:12.5px;font-weight:650;color:var(--text-2)}
+.attach-head .ic{width:16px;height:16px}
+.attach-grid{display:grid;grid-template-columns:1fr;gap:1px;background:var(--border)}
+@media (min-width:560px){.attach-grid{grid-template-columns:1fr 1fr}}
+@media (min-width:900px){.attach-grid{grid-template-columns:1fr 1fr 1fr}}
+.attach-item{display:flex;align-items:center;gap:11px;padding:11px 13px;background:var(--surface);min-width:0;transition:background var(--t-fast)}
+.attach-item:hover{background:var(--hover)}
+.attach-ic{width:34px;height:34px;border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center;background:var(--accent-soft);color:var(--accent);flex:none}
+.attach-ic .ic{width:17px;height:17px}
+.attach-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attach-size{font-size:11.5px;color:var(--text-3)}
+.frame-wrap{position:relative;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;background:#fff}
+#mail-frame{width:100%;border:0;display:block;background:#fff}
+.frame-load{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:9px;color:#8b93a3;font-size:13px;background:#fff}
+.frame-load .ic{width:17px;height:17px}
+.translated{background:var(--accent-soft);border:1px solid var(--accent-soft-2);border-radius:var(--r-md);padding:16px;white-space:pre-wrap;word-break:break-word;font-size:15px;line-height:1.75;color:var(--text)}
+.toolbar-inline{display:flex;gap:8px;margin-top:12px}
+
+/* ---------- 对话框 ---------- */
+.modal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:18px}
+.modal-scrim{position:absolute;inset:0;background:var(--scrim);backdrop-filter:blur(3px);animation:cffade .18s var(--ease)}
+.modal-card{position:relative;width:100%;max-width:384px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--sh-3);padding:22px;text-align:center;animation:cfpop .22s var(--ease)}
+.modal-ic{width:46px;height:46px;border-radius:var(--r-full);display:flex;align-items:center;justify-content:center;margin:0 auto 13px;background:var(--accent-soft);color:var(--accent)}
+.modal-ic.danger{background:var(--danger-soft);color:var(--danger)}
+.modal-ic .ic{width:22px;height:22px}
+.modal-card h3{font-size:16px;font-weight:650;margin-bottom:6px}
+.modal-card p{font-size:13.5px;color:var(--text-2);line-height:1.65;margin-bottom:20px}
+.modal-actions{display:flex;gap:9px}
+.modal-actions .btn{flex:1}
+body.modal-open{overflow:hidden}
+
+/* ---------- 浮层提示 ---------- */
+.toast-region{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom));z-index:90;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;width:max-content;max-width:calc(100vw - 32px)}
+@media (max-width:899px){.toast-region{bottom:calc(var(--tabbar-h) + 16px + env(safe-area-inset-bottom))}}
+.toast{display:flex;align-items:center;gap:9px;padding:11px 16px;border-radius:var(--r-full);background:var(--text);color:var(--surface);font-size:13.5px;font-weight:600;box-shadow:var(--sh-3);animation:cfpop .22s var(--ease);transition:opacity .2s,transform .2s}
+.toast .ic{width:17px;height:17px}
+.toast.ok{background:var(--success);color:var(--success-fg)}
+.toast.err{background:var(--danger);color:var(--danger-fg)}
+
+/* ---------- 登录 / 初始化 ---------- */
+.auth{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(1100px 560px at 50% -12%,var(--accent-soft),transparent 62%),var(--bg)}
+.auth-card{width:100%;max-width:404px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);box-shadow:var(--sh-2);overflow:hidden}
+.auth-body{padding:30px 28px 26px}
+.auth-head{text-align:center;margin-bottom:22px}
+.auth-mark{width:52px;height:52px;border-radius:15px;margin:0 auto 16px;display:block;box-shadow:0 12px 28px -12px rgba(79,70,229,.75)}
+.auth-head h1{font-size:21px;font-weight:700;letter-spacing:-.015em}
+.auth-sub{font-size:13.5px;color:var(--text-3);margin-top:6px;line-height:1.6}
+.auth-foot{padding:13px;text-align:center;border-top:1px solid var(--border);background:var(--surface-2);font-size:11.5px;color:var(--text-3)}
+.auth-form{display:flex;flex-direction:column;gap:16px}
+.turnstile-wrap{display:flex;justify-content:center;padding-top:2px}
+@media (max-width:420px){.auth-body{padding:26px 20px 22px}}
+`;
+
+// ---------- 主题引导 ----------
+//
+// 必须内联在 <head> 里、并且早于样式表求值：
+// 这样 <html data-theme> 在首帧之前就定好了，深色系统下不会先闪一下白底。
+// 用户显式选过 light/dark 就用他的选择，否则跟随系统；选择存在 localStorage，不上传服务器。
+const THEME_BOOT = '<script>(function(){'
+    + 'var K="cfmail-theme",s=null;'
+    + 'try{s=localStorage.getItem(K)}catch(e){}'
+    + 'var mq=window.matchMedia?window.matchMedia("(prefers-color-scheme: dark)"):null;'
+    + 'function r(){return (s==="light"||s==="dark")?s:((mq&&mq.matches)?"dark":"light")}'
+    + 'function a(){document.documentElement.setAttribute("data-theme",r())}'
+    + 'a();'
+    + 'if(mq){try{mq.addEventListener("change",function(){if(s!=="light"&&s!=="dark")a()})}catch(e){}}'
+    + 'window.__cfmailTheme={'
+    + 'mode:function(){return s||"auto"},'
+    + 'set:function(v){s=(v==="light"||v==="dark")?v:null;'
+    + 'try{if(s)localStorage.setItem(K,s);else localStorage.removeItem(K)}catch(e){}'
+    + 'a();if(window.__cfmailSyncTheme)window.__cfmailSyncTheme()}};'
+    + '})();<\/script>';
+
 const renderAppIcon = () => `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="128" fill="#4f46e5"/>
-  <path d="M112 160h288c17.6 0 32 14.4 32 32v192c0 17.6-14.4 32-32 32H112c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32zm20.8 32l106.6 86.6c9.6 7.8 23.6 7.8 33.2 0L379.2 192H132.8z" fill="white"/>
+  <defs>
+    <linearGradient id="cfmailLogo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="152" fill="url(#cfmailLogo)"/>
+  <rect x="104" y="140" width="304" height="232" rx="46" fill="#ffffff" opacity="0.96"/>
+  <path d="M126 174l111 87c11 8.6 27 8.6 38 0l111-87" fill="none" stroke="#4338ca" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
 const renderManifest = () => JSON.stringify({
-    name: "Cloudflare Mail",
+    name: "CF Mail · Cloudflare 邮箱",
     short_name: "CF Mail",
+    description: "基于 Cloudflare Workers 的无服务器网页邮箱",
+    lang: "zh-CN",
+    dir: "ltr",
     start_url: "/",
+    scope: "/",
     display: "standalone",
+    display_override: ["standalone", "minimal-ui"],
     background_color: "#ffffff",
     theme_color: "#4f46e5",
     orientation: "portrait-primary",
+    categories: ["productivity", "utilities"],
     icons: [
-        { src: "/logo.svg", sizes: "any", type: "image/svg+xml" },
+        { src: "/logo.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
         { src: "/logo.svg", sizes: "192x192", type: "image/svg+xml" },
         { src: "/logo.svg", sizes: "512x512", type: "image/svg+xml" }
     ]
 });
 
+// Service Worker：只做两件事 —— 立即接管，以及缓存两枚不会变的静态资源。
+//
+// 刻意**不**缓存任何 HTML：本站所有页面都是「已登录才可见」的私人数据，
+// 缓存它们意味着退出登录后仍可能从缓存里翻出邮件。静态资源则相反，值得缓存。
+const SW_STATIC = ['/logo.svg', '/manifest.json'];
+
 const renderServiceWorker = () => `
-self.addEventListener('install', (e) => { self.skipWaiting(); });
-self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
-self.addEventListener('fetch', (e) => { e.respondWith(fetch(e.request)); });
+var STATIC = ${JSON.stringify(SW_STATIC)};
+self.addEventListener('install', function (e) {
+    self.skipWaiting();
+    e.waitUntil(caches.open('cfmail-static').then(function (c) { return c.addAll(STATIC); }).catch(function () {}));
+});
+self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', function (e) {
+    var req = e.request;
+    if (req.method !== 'GET') return;
+    var url;
+    try { url = new URL(req.url); } catch (err) { return; }
+    if (url.origin !== self.location.origin) return;
+    if (STATIC.indexOf(url.pathname) === -1) return;
+    e.respondWith(caches.match(req).then(function (hit) { return hit || fetch(req); }));
+});
 `;
 
 // ==========================================
@@ -318,7 +735,92 @@ function salvageBrokenRfc2047(text) {
     );
 }
 
+// 抢救「没做 RFC 2047 编码、直接塞 UTF-8 原始字节」的头部。
+//
+// 有些发信程序（国内 CMS、PHP mail()、部分监控告警系统）不把中文主题编码成
+//     Subject: =?UTF-8?B?6ZW/6YKu5Lu2?=
+// 而是直接写原始字节
+//     Subject: <E9 95 BF E9 82 AE E4 BB B6>
+// 这不合规，但真实存在。邮件本体被 bufferToBinaryString 逐字节读成单字节字符后，
+// 显示出来就是「é•¿é‚®ä»¶」这种乱码 —— 看起来像坏数据，其实是完好的 UTF-8 被当成了单字节字符集。
+// Gmail / Outlook 都会在这里按 UTF-8 兜一次，这里做同样的事。
+//
+// 同一条路还能治另一个高频错误：发信方把 UTF-8 字节**错标**成 ISO-8859-1
+//     Subject: =?ISO-8859-1?B?6ZW/6YKu5Lu2?=
+// 解出来同样是单字节乱码，形状完全一致。
+//
+// ⚠️ 判定单字节时必须同时认 windows-1252 的「高位区映射」：
+//    WHATWG 编码规范把 iso-8859-1 这个标签别名到了 windows-1252，字节 0x80–0x9F
+//    解出来是 € ‚ ƒ „ … † ‡ ˆ ‰ Š ‹ Œ Ž ‘ ’ “ ” • – — ˜ ™ š › œ ž Ÿ 这些**大于 0xFF** 的字符。
+//    只按「charCode ≤ 0xFF」判断会漏掉一大片（UTF-8 的 E9 95 BF 里，0x95 就变成了 U+2022 •），
+//    于是乱码原样留在页面上。
+//
+// 三道门必须同时通过，避免误伤真正的西欧文本（例如 "Café"）：
+//   ① 每个字符都能映射回**单个字节**（直接落在 0x00–0xFF，或命中 windows-1252 高位区反查表）；
+//   ② 拼回的字节流用 **fatal 模式** 按 UTF-8 解码必须成功。真正的 Latin-1 / windows-1252 文本
+//      几乎必然失败：'é' 是单字节 0xE9，后面还得跟两个 0x80–0xBF 的续字节，而 "Café" 里
+//      0xE9 后面是串尾 → 抛错 → 保持原样；
+//   ③ 解出的结果里，非 ASCII 字符 ≥ 2 个，或存在码点 > U+07FF 的字符（即用到了 3 字节及以上的
+//      UTF-8 序列）。这一条挡的是「两个字节恰好凑成一个合法 UTF-8 字符」的巧合（如 "Ã©"→"é"）：
+//      宁可留一个明显坏掉的字符，也不要因为猜错把一个本来正确的字符改坏。
+//
+// 注意这里**不猜 GBK**：GBK 字节流不具自校验性，任意字节序列都能解出「像那么回事」的汉字，
+// 猜错比乱码更糟（乱码至少一眼看得出是坏的）。没有声明字符集的原始字节，只认 UTF-8。
+const WIN1252_HIGH = {
+    0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86,
+    0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A, 0x2039: 0x8B, 0x0152: 0x8C,
+    0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95,
+    0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98, 0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B,
+    0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F
+};
+
+function salvageUtf8Bytes(text) {
+    if (!text) return text;
+    const bytes = new Uint8Array(text.length);
+    let hasHighByte = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        let b;
+        if (c < 0x80) {
+            b = c;
+        } else if (c <= 0xFF) {
+            b = c;                                   // 直接落在单字节区
+            hasHighByte = true;
+        } else if (Object.prototype.hasOwnProperty.call(WIN1252_HIGH, c)) {
+            b = WIN1252_HIGH[c];                     // windows-1252 高位区反查
+            hasHighByte = true;
+        } else {
+            return text;                             // ① 存在无法还原成单字节的字符 → 不是这种乱码
+        }
+        bytes[i] = b;
+    }
+    if (!hasHighByte) return text;                   // 纯 ASCII，无事可做
+
+    let decoded;
+    try {
+        decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);   // ②
+    } catch (e) {
+        return text;
+    }
+
+    let wide = 0;
+    let hasThreeByte = false;
+    for (const ch of decoded) {
+        const cp = ch.codePointAt(0);
+        if (cp > 0xFF) wide++;
+        if (cp > 0x7FF) hasThreeByte = true;
+    }
+    return (wide >= 2 || hasThreeByte) ? decoded : text;                     // ③
+}
+
 function decodeHeaderValue(text) {
+    return salvageUtf8Bytes(decodeHeaderValueRaw(text));
+}
+
+// 还原原始字节之前的所有解码步骤。拆成两层是为了让「UTF-8 字节抢救」成为**最后**一道工序 ——
+// 上面几条分支都可能产出单字节乱码：最典型的是发信方把 UTF-8 字节错标成 ISO-8859-1
+// （=?ISO-8859-1?B?6ZW/6YKu5Lu2?=），解出来正好是 U+0080–U+00FF 区间，同样需要抢救。
+function decodeHeaderValueRaw(text) {
     if (!text) return '';
     if (text.includes("''")) {
         const parts = text.split("''");
@@ -742,313 +1244,807 @@ async function resolveEmailKey(env, rawKey) {
     return null;
 }
 
+// 头像底色。返回的是 CSS 类名（.av-0 ~ .av-7），不是 Tailwind 调色板 ——
+// 调色板挪进了设计系统，这样浅色 / 深色两套主题下的对比度都能统一控制。
 function getAvatarColor(name) {
-    const colors = ['bg-red-500', 'bg-orange-500', 'bg-amber-500', 'bg-green-500', 'bg-emerald-500', 'bg-teal-500', 'bg-cyan-500', 'bg-blue-500', 'bg-indigo-500', 'bg-violet-500', 'bg-purple-500', 'bg-fuchsia-500', 'bg-pink-500', 'bg-rose-500'];
     let hash = 0;
     const cleanName = name || '?';
     for (let i = 0; i < cleanName.length; i++) hash = cleanName.charCodeAt(i) + ((hash << 5) - hash);
-    return colors[Math.abs(hash) % colors.length];
+    return 'av-' + (Math.abs(hash) % 8);
 }
 
 // ==========================================
 // 3. UI 渲染与滚动修复
 // ==========================================
 
+// 图标集。
+//
+// 全部按 24 网格、1.75 描边统一绘制，尺寸交给 CSS 的 .ic 控制，
+// 这样按钮、列表、卡片里的图标粗细与视觉重量天然一致
+// （旧版混用 w-5/w-6 与两套 stroke-width，并排放就会显得不齐）。
+// 纯内联 SVG：不引图标字体、不引 sprite 文件，离线可用。
+const _ic = (paths) => '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + paths + '</svg>';
+
 const Icons = {
-    inbox: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>`,
-    trash: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>`,
-    refresh: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>`,
-    logout: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>`,
-    back: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>`,
-    attach: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>`,
-    file: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`,
-    download: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>`,
-    menu: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>`,
-    user: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>`,
-    lock: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>`,
-    spinner: `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`,
-    alert: `<svg class="w-10 h-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>`,
-    read: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" /></svg>`,
-    unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`,
-    gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`,
-    translate: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`,
-    search: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" /></svg>`,
-    key: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>`
+    inbox: _ic('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
+    trash: _ic('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/>'),
+    refresh: _ic('<path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 16"/><path d="M3 21v-5h5"/>'),
+    restore: _ic('<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>'),
+    logout: _ic('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>'),
+    back: _ic('<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>'),
+    attach: _ic('<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>'),
+    file: _ic('<path d="M14 3v5h5"/><path d="M15 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>'),
+    image: _ic('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="1.6"/><path d="M21 15l-4.5-4.5L7 20"/>'),
+    download: _ic('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>'),
+    user: _ic('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'),
+    lock: _ic('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+    alert: _ic('<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>'),
+    mailOpen: _ic('<path d="M22 9 12 15 2 9"/><path d="M2 9.6 12 4l10 5.6V19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/>'),
+    mail: _ic('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>'),
+    gear: _ic('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
+    translate: _ic('<path d="M4 5h10"/><path d="M9 3v2"/><path d="M11.5 15.5 8 8l-3.5 7.5"/><path d="M5.5 13h5"/><path d="M14 20l4-9 4 9"/><path d="M15.5 17h5"/>'),
+    search: _ic('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+    check: _ic('<path d="M20 6 9 17l-5-5"/>'),
+    copy: _ic('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+    sun: _ic('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'),
+    moon: _ic('<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'),
+    auto: _ic('<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>'),
+    eye: _ic('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'),
+    eyeOff: _ic('<path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.4 0 10 7 10 7a17 17 0 0 1-2.16 3.19M6.6 6.6A17 17 0 0 0 2 11s3.6 7 10 7a9.3 9.3 0 0 0 5.4-1.6"/><path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"/><path d="M2 2l20 20"/>'),
+    shield: _ic('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'),
+    spinner: '<svg class="ic spin" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity=".22"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>'
 };
 
 const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0, opts = {}) => {
-    const unreadCount = Number(opts.unreadCount) || 0;
-    const unreadBadge = unreadCount > 0
-        ? `<span class="ml-auto min-w-[1.5rem] h-6 px-2 flex items-center justify-center rounded-full bg-indigo-600 text-white text-xs font-semibold">${unreadCount > 999 ? '999+' : unreadCount}</span>`
+    const o = opts || {};
+    const docTitle = o.title ? escapeHtml(o.title) + ' · CF Mail' : 'CF Mail';
+    const unreadCount = Number(o.unreadCount) || 0;
+    const navBadge = unreadCount > 0
+        ? '<span class="nav-badge">' + (unreadCount > 999 ? '999+' : unreadCount) + '</span>'
         : '';
-    return `
-<!DOCTYPE html>
+    const tabBadge = unreadCount > 0
+        ? '<span class="tab-badge">' + (unreadCount > 99 ? '99+' : unreadCount) + '</span>'
+        : '';
+
+    // 导航项。aria-current 让读屏软件知道「你在哪一页」，
+    // 左侧那条竖线（.nav-item.active::before）是给眼睛看的同一件事。
+    const navItem = (page, href, label, icon, extraClass) =>
+        '<a href="' + href + '" class="nav-item' + (extraClass ? ' ' + extraClass : '') + (activePage === page ? ' active' : '') + '"'
+        + (activePage === page ? ' aria-current="page"' : '') + '>'
+        + icon + '<span>' + label + '</span>' + (page === 'inbox' ? navBadge : '') + '</a>';
+
+    const tabItem = (page, href, label, icon) =>
+        '<a href="' + href + '" class="tab' + (activePage === page ? ' active' : '') + '"'
+        + (activePage === page ? ' aria-current="page"' : '') + '>'
+        + icon + '<span>' + label + '</span>' + (page === 'inbox' ? tabBadge : '') + '</a>';
+
+    // 主题选择器。浅色 / 深色 / 跟随系统三档显式可选，
+    // 比一个「点一下转一圈」的图标按钮更容易理解，也不用猜现在是哪一档。
+    const themeSeg = '<div class="seg" role="group" aria-label="外观主题">'
+        + '<button type="button" class="seg-btn" data-theme-opt="light" aria-pressed="false">' + Icons.sun + '<span>浅色</span></button>'
+        + '<button type="button" class="seg-btn" data-theme-opt="dark" aria-pressed="false">' + Icons.moon + '<span>深色</span></button>'
+        + '<button type="button" class="seg-btn" data-theme-opt="auto" aria-pressed="false">' + Icons.auto + '<span>系统</span></button>'
+        + '</div>';
+
+    return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Cloudflare Mail</title>
-    <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#4f46e5">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <link rel="icon" type="image/svg+xml" href="/logo.svg">
-    <link rel="apple-touch-icon" href="/logo.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        body { font-family: 'Inter', system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .email-body img { max-width: 100%; height: auto; }
-        .email-body blockquote { border-left: 3px solid #e5e7eb; padding-left: 0.8rem; color: #6b7280; }
-        .custom-checkbox input:checked + div { background-color: #4f46e5; border-color: #4f46e5; }
-        .custom-checkbox input:checked + div svg { display: block; }
-        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
-        .mobile-sidebar-backdrop { background-color: rgba(0,0,0,0.5); }
-        .modal-enter { opacity: 0; transform: scale(0.95); }
-        .modal-enter-active { opacity: 1; transform: scale(1); transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
-        .modal-leave { opacity: 1; transform: scale(1); }
-        .modal-leave-active { opacity: 0; transform: scale(0.95); transition: all 0.15s ease-in; }
-        .unread-dot { width: 8px; height: 8px; background-color: #4f46e5; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
-        .sidebar-link { transition: all 0.15s ease-in-out; }
-        .sidebar-link.active { background-color: #eef2ff; color: #4f46e5; font-weight: 600; }
-        .sidebar-link:hover:not(.active) { background-color: #f8f9fa; }
-    </style>
-    <script>
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
-
-        // 时间一律在客户端按**用户本地时区**格式化。
-        // 不能在 Worker 里用 toLocaleDateString —— Workers 运行时是 UTC，
-        // 中国用户看到的日期会整整差 8 小时（早上 7 点收到的邮件会显示成前一天）。
-        function formatTs(ts, full) {
-            const d = new Date(ts);
-            const now = new Date();
-            const pad = n => String(n).padStart(2, '0');
-            const hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
-            if (full) return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
-            if (d.toDateString() === now.toDateString()) return hm;
-            if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '月' + d.getDate() + '日';
-            return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
-        }
-        function hydrateTimes() {
-            const nodes = document.querySelectorAll('time[data-ts]');
-            for (const el of nodes) {
-                const ts = parseInt(el.getAttribute('data-ts'), 10);
-                if (ts > 0) el.textContent = formatTs(ts, el.getAttribute('data-fmt') === 'full');
-            }
-        }
-        document.addEventListener('DOMContentLoaded', hydrateTimes);
-
-        const CURRENT_PAGE_LATEST_TS = ${latestTimestamp};
-        if (window.location.pathname === '/' && CURRENT_PAGE_LATEST_TS > 0) {
-            setInterval(async () => {
-                try {
-                    const res = await fetch('/api/check');
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.latest > CURRENT_PAGE_LATEST_TS) {
-                            const toast = document.createElement('div');
-                            toast.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 p-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-600/50 z-[70] transition-opacity duration-300';
-                            toast.textContent = '检测到新邮件，正在刷新...';
-                            document.body.appendChild(toast);
-                            setTimeout(() => { window.location.reload(); }, 1500);
-                        }
-                    }
-                } catch(e) {}
-            }, 15000); 
-        }
-
-        window._confirmCallback = null;
-        function showModal(title, msg, callback, isDestructive = false) {
-            document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-msg').textContent = msg;
-            const btn = document.getElementById('modal-confirm-btn');
-            if (isDestructive) {
-                btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700', 'shadow-indigo-600/30');
-                btn.classList.add('bg-red-600', 'hover:bg-red-700', 'shadow-red-600/30');
-            } else {
-                btn.classList.remove('bg-red-600', 'hover:bg-red-700', 'shadow-red-600/30');
-                btn.classList.add('bg-indigo-600', 'hover:bg-indigo-700', 'shadow-indigo-600/30');
-            }
-            const backdrop = document.getElementById('modal-backdrop');
-            const panel = document.getElementById('modal-panel');
-            backdrop.classList.remove('hidden');
-            void backdrop.offsetWidth;
-            backdrop.classList.remove('opacity-0');
-            panel.classList.remove('opacity-0', 'scale-95');
-            window._confirmCallback = callback;
-        }
-        function hideModal() {
-            const backdrop = document.getElementById('modal-backdrop');
-            const panel = document.getElementById('modal-panel');
-            backdrop.classList.add('opacity-0');
-            panel.classList.add('opacity-0', 'scale-95');
-            setTimeout(() => { backdrop.classList.add('hidden'); }, 200);
-            window._confirmCallback = null;
-        }
-        function onModalConfirm() { if (window._confirmCallback) window._confirmCallback(); hideModal(); }
-        function confirmBatch(action) {
-            const map = { 'delete': '移入回收站', 'purge': '彻底删除', 'restore': '恢复', 'mark_read': '标记为已读', 'mark_unread': '标记为未读' };
-            const isDestructive = action === 'delete' || action === 'purge';
-            if (action === 'mark_read' || action === 'mark_unread') { submitBatchForm(action); return; }
-            const msg = \`确定要将选中的邮件\${map[action]}吗？此操作\${action === 'purge' ? '不可恢复' : '可撤销'}。\`;
-            showModal(map[action], msg, () => { submitBatchForm(action); }, isDestructive);
-        }
-        function submitBatchForm(action) {
-            const form = document.getElementById('batch-form');
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'action';
-            input.value = action;
-            form.appendChild(input);
-            form.submit();
-        }
-        function confirmSingle(event, msg, isDestructive) {
-            event.preventDefault();
-            const form = event.target;
-            showModal('确认操作', msg, () => { form.submit(); }, isDestructive);
-            return false;
-        }
-        function toggleAll(source) {
-            const checkboxes = document.querySelectorAll('input[name="keys"]');
-            checkboxes.forEach(cb => { cb.checked = source.checked; updateRowStyle(cb); });
-            updateToolbar();
-        }
-        function updateRowStyle(checkbox) {
-            const row = checkbox.closest('.email-row');
-            checkbox.checked ? row.classList.add('bg-indigo-50') : row.classList.remove('bg-indigo-50');
-            updateToolbar();
-        }
-        function updateToolbar() {
-            const count = document.querySelectorAll('input[name="keys"]:checked').length;
-            const actionHeader = document.getElementById('action-header');
-            const defaultHeader = document.getElementById('default-header');
-            if (actionHeader && defaultHeader) {
-                actionHeader.classList.toggle('hidden', count === 0);
-                defaultHeader.classList.toggle('hidden', count > 0);
-                document.getElementById('selected-count').textContent = count;
-            }
-        }
-        function toggleMenu() {
-            const sidebar = document.getElementById('mobile-sidebar');
-            const backdrop = document.getElementById('mobile-backdrop');
-            const isClosed = sidebar.classList.contains('-translate-x-full');
-            if (isClosed) {
-                sidebar.classList.remove('-translate-x-full');
-                backdrop.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            } else {
-                sidebar.classList.add('-translate-x-full');
-                backdrop.classList.add('hidden');
-                document.body.style.overflow = '';
-            }
-        }
-
-        // 邮件正文渲染在沙箱 iframe 里，由它 postMessage 回报正文容器高度，父页面据此调整高度。
-        // 校验 e.source === frame.contentWindow，避免页面内其它来源伪造高度。
-        //
-        // ⚠️ 高度必须「原样采用」，绝不能加固定增量。iframe 高度会决定它内部视口的高度，
-        //    而 documentElement.scrollHeight 被视口高度托底 —— 一旦在这里加常数，
-        //    就会形成「视口变高 → 测得更高 → iframe 再变高」的正反馈，
-        //    表现为打开邮件后正文下方无限空白（实测 4 秒能涨 1700px 以上）。
-        //    appliedHeight 做去重，避免同样的高度反复写 style。
-        //
-        // ⚠️ 还有一类内容用上面的办法治不好：正文里带 vh 单位（例如 <div style="min-height:100vh">）。
-        //    vh 天然绑定视口高度，而视口高度正是我们在设的值 —— 这类内容不存在不动点，
-        //    高度会以固定步长匀速爬升。真实内容不会「等幅」增长（图片陆续加载的步长是参差的），
-        //    所以连续 3 次等幅递增就判定为反馈环并停止跟随。窗口尺寸变化时重置判定。
-        let appliedHeight = -1;
-        let lastStep = 0;
-        let sameStep = 0;
-        window.addEventListener('resize', function () { lastStep = 0; sameStep = 0; });
-        window.addEventListener('message', function (e) {
-            const d = e.data;
-            if (!d || typeof d.__cfmailHeight !== 'number') return;
-            const frame = document.getElementById('mail-frame');
-            if (!frame || e.source !== frame.contentWindow) return;
-            const h = Math.min(Math.max(Math.ceil(d.__cfmailHeight), 120), 20000);
-            if (h === appliedHeight) return;
-            const step = appliedHeight > 0 ? h - appliedHeight : 0;
-            if (step > 0 && step <= 64 && step === lastStep) {
-                if (++sameStep >= 3) return;
-            } else {
-                sameStep = 0;
-            }
-            lastStep = step;
-            appliedHeight = h;
-            frame.style.height = h + 'px';
-        });
-
-        // 邮件行点击改用事件委托：原来把键名拼进 onclick 的单引号字符串里，
-        // 而 encodeURIComponent 并不转义单引号，主题里带单引号就能闭合字符串注入脚本。
-        //
-        // ⚠️ 这里绝不能用「祖先里有 form 就跳过」来判断交互控件：
-        //    邮件行本身就位于 <form id="batch-form"> 内部，closest('form') 永远命中，
-        //    结果就是整行点击被吞掉、邮件永远打不开。
-        //    必须先把 target 归到行上，再判断它是不是行内真正的控件。
-        document.addEventListener('click', function (e) {
-            const t = e.target;
-            if (!t || typeof t.closest !== 'function') return;
-            const row = t.closest('.email-row');
-            if (!row || !row.dataset.key) return;
-            if (t.closest('a, button, input, label, select, textarea, iframe')) return;
-            window.location.href = '/email/' + row.dataset.key;
-        });
-
-        // 危险操作二次确认：第一次点击只「上膛」，4 秒内再点一次才真正提交。
-        // 比原生 confirm() 更贴合页面风格，也不会被浏览器拦截。
-        function askClear(btn) {
-            if (btn.dataset.armed === '1') return true;
-            btn.dataset.armed = '1';
-            const original = btn.textContent;
-            btn.textContent = '再点一次确认清空';
-            btn.classList.add('bg-red-600', 'text-white');
-            setTimeout(function () {
-                btn.dataset.armed = '';
-                btn.textContent = original;
-                btn.classList.remove('bg-red-600', 'text-white');
-            }, 4000);
-            return false;
-        }
-    </script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${docTitle}</title>
+${THEME_BOOT}
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f14" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/logo.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CF Mail">
+<link rel="stylesheet" href="/app.css?v=${UI_VERSION}">
 </head>
-<body class="bg-gray-50 fixed inset-0 flex overflow-hidden text-gray-800 w-full">
-    <div id="modal-backdrop" class="fixed inset-0 z-[60] hidden transition-opacity duration-200 opacity-0">
-        <div class="absolute inset-0 bg-gray-900/40 backdrop-blur-sm" onclick="hideModal()"></div>
-        <div class="flex items-center justify-center min-h-screen p-4">
-            <div id="modal-panel" class="relative bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 transition-all duration-200 transform scale-95 opacity-0">
-                <div class="flex flex-col items-center text-center">
-                    <div class="mb-4 bg-red-50 p-3 rounded-full">${Icons.alert}</div>
-                    <h3 id="modal-title" class="text-lg font-bold text-gray-900 mb-2"></h3>
-                    <p id="modal-msg" class="text-sm text-gray-500 mb-6 leading-relaxed"></p>
-                    <div class="flex space-x-3 w-full">
-                        <button onclick="hideModal()" class="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition-colors">取消</button>
-                        <button id="modal-confirm-btn" onclick="onModalConfirm()" class="flex-1 px-4 py-2.5 bg-indigo-600 text-white font-medium rounded-xl shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 transition-all active:scale-95">确定</button>
-                    </div>
-                </div>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+<div class="app">
+    <aside class="sidebar" id="sidebar">
+        <div class="brand">
+            ${brandMark()}
+            <div class="grow">
+                <div class="brand-name">CF Mail</div>
+                <div class="brand-sub">Cloudflare Workers 邮箱</div>
             </div>
         </div>
-    </div>
-    <div id="mobile-backdrop" onclick="toggleMenu()" class="fixed inset-0 mobile-sidebar-backdrop z-40 hidden md:hidden transition-opacity"></div>
-    <aside id="mobile-sidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out -translate-x-full md:relative md:translate-x-0 md:flex flex-col h-full shadow-xl md:shadow-none">
-        <div class="p-5 flex items-center justify-between border-b border-gray-100 h-16">
-            <div class="flex items-center space-x-3"><div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">M</div><span class="font-semibold text-xl tracking-tight text-gray-900">CF Mail</span></div>
-            <button onclick="toggleMenu()" class="md:hidden text-gray-500"><svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
-        </div>
-        <nav class="flex-1 p-4 space-y-1 overflow-y-auto">
-            <a href="/" class="sidebar-link ${activePage === 'inbox' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'inbox' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.inbox}</span>收件箱${unreadBadge}</a>
-            <a href="/trash" class="sidebar-link ${activePage === 'trash' ? 'active bg-red-50 text-red-700' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'trash' ? 'text-red-600' : 'text-gray-400 group-hover:text-red-500'}">${Icons.trash}</span>已删除</a>
-            <a href="/settings" class="sidebar-link ${activePage === 'settings' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'settings' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.gear}</span>设置</a>
+        <nav class="nav" aria-label="主导航">
+            ${navItem('inbox', '/', '收件箱', Icons.inbox)}
+            ${navItem('trash', '/trash', '已删除', Icons.trash, 'danger')}
+            ${navItem('settings', '/settings', '设置', Icons.gear)}
         </nav>
-        <div class="p-4 border-t border-gray-100 safe-bottom"><a href="/logout" class="flex items-center px-3 py-3 text-base font-medium text-red-600 rounded-xl hover:bg-red-50 transition-colors"><span class="mr-3">${Icons.logout}</span>退出登录</a></div>
+        <div class="nav-foot">
+            <div class="nav-foot-label">外观</div>
+            ${themeSeg}
+            <a href="/logout" class="nav-item logout">${Icons.logout}<span>退出登录</span></a>
+        </div>
     </aside>
-    <main class="flex-1 flex flex-col min-w-0 min-h-0 bg-white md:bg-gray-50 w-full relative z-0">${content}</main>
-</body></html>`;
+    <main class="main" id="main" tabindex="-1">${content}</main>
+</div>
+<nav class="tabbar" aria-label="页面切换">
+    ${tabItem('inbox', '/', '收件箱', Icons.inbox)}
+    ${tabItem('trash', '/trash', '已删除', Icons.trash)}
+    ${tabItem('settings', '/settings', '设置', Icons.gear)}
+</nav>
+<div class="modal" id="modal-backdrop" hidden>
+    <div class="modal-scrim" data-modal-close></div>
+    <div class="modal-card" id="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-msg">
+        <div class="modal-ic" id="modal-icon">${Icons.alert}</div>
+        <h3 id="modal-title"></h3>
+        <p id="modal-msg"></p>
+        <div class="modal-actions">
+            <button type="button" class="btn ghost" data-modal-close>取消</button>
+            <button type="button" class="btn primary" id="modal-confirm-btn">确定</button>
+        </div>
+    </div>
+</div>
+<div class="toast-region" id="toast-region" role="status" aria-live="polite"></div>
+<script>
+(function () {
+    'use strict';
+    var LATEST_TS = ${latestTimestamp};
+    var DANGER = 'danger';
+
+    function $(id) { return document.getElementById(id); }
+
+    // 注册 Service Worker（用于缓存 logo / manifest 这类静态资源，不缓存任何邮件页面）。
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(function () {});
+    }
+
+    /* ---------- 时间 ---------- */
+    // 一律在客户端按用户本地时区格式化。Workers 运行时是 UTC，
+    // 在服务端 toLocaleDateString 会让中国用户看到整整差 8 小时的日期。
+    function formatTs(ts, full) {
+        var d = new Date(ts), now = new Date();
+        function pad(n) { return String(n).padStart(2, '0'); }
+        var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+        if (full) return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
+        if (d.toDateString() === now.toDateString()) return hm;
+        if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+        return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    }
+
+    function hydrateTimes() {
+        var nodes = document.querySelectorAll('time[data-ts]');
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            var ts = parseInt(el.getAttribute('data-ts'), 10);
+            if (!(ts > 0)) continue;
+            el.textContent = formatTs(ts, el.getAttribute('data-fmt') === 'full');
+            if (!el.title) el.title = formatTs(ts, true);
+        }
+    }
+
+    /* ---------- 日期分组 ---------- */
+    // 列表按「今天 / 昨天 / 本周 / 更早」分组。分组必须在浏览器里算 ——
+    // 服务端只知道 UTC，跨时区算出来的「今天」是错的。
+    function dayLabel(ts) {
+        var d = new Date(ts), n = new Date();
+        var today = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+        var that = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        var diff = Math.round((today - that) / 86400000);
+        if (diff <= 0) return '今天';
+        if (diff === 1) return '昨天';
+        if (diff < 7) return '本周';
+        if (d.getFullYear() === n.getFullYear()) return (d.getMonth() + 1) + '月';
+        return d.getFullYear() + '年' + (d.getMonth() + 1) + '月';
+    }
+
+    function groupDays() {
+        var wrap = $('list-wrap');
+        if (!wrap) return;
+        var rows = wrap.querySelectorAll('.row');
+        var cur = null;
+        for (var i = 0; i < rows.length; i++) {
+            var ts = parseInt(rows[i].getAttribute('data-ts') || '0', 10);
+            var key = ts > 0 ? String(new Date(ts).toDateString()) : 'unknown';
+            if (key === cur) continue;
+            cur = key;
+            var sep = document.createElement('div');
+            sep.className = 'daysep';
+            sep.textContent = ts > 0 ? dayLabel(ts) : '日期未知';
+            wrap.insertBefore(sep, rows[i]);
+        }
+    }
+
+    /* ---------- 主题 ---------- */
+    function syncTheme() {
+        var mode = window.__cfmailTheme ? window.__cfmailTheme.mode() : 'auto';
+        var nodes = document.querySelectorAll('[data-theme-opt]');
+        for (var i = 0; i < nodes.length; i++) {
+            var on = nodes[i].getAttribute('data-theme-opt') === mode;
+            nodes[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+    }
+    window.__cfmailSyncTheme = syncTheme;
+
+    /* ---------- 浮层提示 ---------- */
+    function toast(msg, kind) {
+        var region = $('toast-region');
+        if (!region) return;
+        var el = document.createElement('div');
+        el.className = 'toast' + (kind ? ' ' + kind : '');
+        el.textContent = msg;
+        region.appendChild(el);
+        setTimeout(function () {
+            el.style.opacity = '0';
+            el.style.transform = 'translateY(6px)';
+            setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+        }, 3200);
+    }
+    window.cfToast = toast;
+    window.cfCopyText = copyText;
+
+    /* ---------- 对话框 ---------- */
+    // 用真 <dialog> 之外的最小可用实现，但把无障碍该有的都补上：
+    // role=dialog / aria-modal、打开时移入焦点、Tab 循环、ESC 关闭、关闭后焦点归位。
+    var modalState = { open: false, lastFocus: null, cb: null };
+
+    function showModal(title, msg, cb, destructive) {
+        var back = $('modal-backdrop'), card = $('modal-panel'), btn = $('modal-confirm-btn');
+        if (!back || !card || !btn) return;
+        $('modal-title').textContent = title;
+        $('modal-msg').textContent = msg;
+        $('modal-icon').className = 'modal-ic' + (destructive ? ' ' + DANGER : '');
+        btn.className = 'btn ' + (destructive ? DANGER : 'primary');
+        modalState.lastFocus = document.activeElement;
+        modalState.cb = cb;
+        modalState.open = true;
+        back.hidden = false;
+        document.body.classList.add('modal-open');
+        btn.focus();
+    }
+
+    function hideModal() {
+        var back = $('modal-backdrop');
+        if (!back || back.hidden) return;
+        back.hidden = true;
+        document.body.classList.remove('modal-open');
+        modalState.open = false;
+        modalState.cb = null;
+        if (modalState.lastFocus && modalState.lastFocus.focus) {
+            try { modalState.lastFocus.focus(); } catch (e) {}
+        }
+    }
+
+    function onModalConfirm() {
+        var cb = modalState.cb;
+        hideModal();
+        if (cb) cb();
+    }
+    window.showModal = showModal;
+    window.hideModal = hideModal;
+
+    var confirmBtn = $('modal-confirm-btn');
+    if (confirmBtn) confirmBtn.addEventListener('click', onModalConfirm);
+
+    /* ---------- 选择与批量操作 ---------- */
+    // ⚠️ 统计范围必须限定在 #batch-form 内。页面里还有一个 #single-form（行内快捷操作
+    //    用的独立表单），它也有一个 name="keys" 的隐藏输入框；如果按 document 全局查询，
+    //    这个隐藏框会被算进总数，于是「全选」永远满足不了「已勾选数 == 总数」，
+    //    表头的全选框就永远不会显示为选中。
+    function batchBoxes() {
+        var form = $('batch-form');
+        return form ? form.querySelectorAll('input[name="keys"]') : [];
+    }
+
+    function markRow(cb) {
+        var row = cb.closest('.row');
+        if (row) row.classList.toggle('sel', cb.checked);
+    }
+
+    function updateToolbar() {
+        var boxes = batchBoxes();
+        var n = 0;
+        for (var i = 0; i < boxes.length; i++) if (boxes[i].checked) n++;
+        var action = $('action-header'), normal = $('default-header');
+        if (action && normal) { action.hidden = n === 0; normal.hidden = n > 0; }
+        var bar = document.querySelector('.topbar');
+        if (bar) bar.classList.toggle('selecting', n > 0);
+        var counter = $('selected-count');
+        if (counter) counter.textContent = n;
+        var all = $('check-all');
+        if (all && boxes.length) {
+            all.checked = n > 0 && n === boxes.length;
+            all.indeterminate = n > 0 && n < boxes.length;
+        }
+    }
+
+    function updateRowStyle(checkbox) { markRow(checkbox); updateToolbar(); }
+
+    function toggleAll(source) {
+        var boxes = batchBoxes();
+        for (var i = 0; i < boxes.length; i++) { boxes[i].checked = source.checked; markRow(boxes[i]); }
+        updateToolbar();
+    }
+
+    function submitBatchForm(action) {
+        var form = $('batch-form');
+        if (!form) return;
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'action';
+        input.value = action;
+        form.appendChild(input);
+        form.submit();
+    }
+
+    function confirmBatch(action) {
+        var map = {
+            delete: ['移入回收站', '选中的邮件将移入回收站，之后可以恢复。'],
+            purge: ['彻底删除', '彻底删除后无法恢复，确定继续吗？'],
+            restore: ['恢复邮件', '选中的邮件将回到收件箱。']
+        };
+        // 已读 / 未读是可逆且无副作用的，不值得打断用户去点一次确认。
+        if (action === 'mark_read' || action === 'mark_unread') { submitBatchForm(action); return; }
+        var m = map[action] || ['确认操作', '确定继续吗？'];
+        showModal(m[0], m[1], function () { submitBatchForm(action); }, action === 'delete' || action === 'purge');
+    }
+
+    function confirmSingle(event, msg, destructive) {
+        event.preventDefault();
+        var form = event.target;
+        showModal('确认操作', msg, function () { form.submit(); }, !!destructive);
+        return false;
+    }
+
+    // 危险操作二次确认：第一次点击只「上膛」，4 秒内再点一次才真正提交。
+    function askClear(btn) {
+        if (btn.dataset.armed === '1') return true;
+        btn.dataset.armed = '1';
+        btn.dataset.label = btn.textContent;
+        btn.textContent = '再点一次确认清空';
+        btn.classList.add(DANGER);
+        setTimeout(function () {
+            btn.dataset.armed = '';
+            btn.textContent = btn.dataset.label;
+            btn.classList.remove(DANGER);
+        }, 4000);
+        return false;
+    }
+
+    window.confirmBatch = confirmBatch;
+    window.confirmSingle = confirmSingle;
+    window.toggleAll = toggleAll;
+    window.updateRowStyle = updateRowStyle;
+    window.askClear = askClear;
+
+    /* ---------- 单封快捷操作 ---------- */
+    // 走一个独立的隐藏表单，而不是去勾选批量表单里的复选框 ——
+    // 否则「把这一封标为已读」会顺手把用户已经勾选的其他邮件一起处理掉。
+    function runQuick(action, key) {
+        var form = $('single-form');
+        if (!form || !key) return;
+        function send() {
+            form.querySelector('[name="action"]').value = action;
+            form.querySelector('[name="keys"]').value = key;
+            form.submit();
+        }
+        if (action === 'delete') showModal('移入回收站', '这封邮件将移入回收站，之后可以恢复。', send, true);
+        else if (action === 'purge') showModal('彻底删除', '彻底删除后无法恢复，确定继续吗？', send, true);
+        else send();
+    }
+
+    /* ---------- 复制到剪贴板 ---------- */
+    function copyText(text, label) {
+        var name = label || '内容';
+        function ok() { toast(name + '已复制', 'ok'); }
+        function bad() { toast('复制失败，请手动选择', 'err'); }
+        function fallback() {
+            try {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.top = '-1000px';
+                document.body.appendChild(ta);
+                ta.select();
+                var done = document.execCommand('copy');
+                document.body.removeChild(ta);
+                if (done) ok(); else bad();
+            } catch (e) { bad(); }
+        }
+        // clipboard API 只在安全上下文可用；localhost 与 https 之外会走到 fallback。
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(ok).catch(fallback);
+        } else fallback();
+    }
+
+    /* ---------- 事件委托 ---------- */
+    // 邮件行点击必须用委托：早期版本把键名拼进 onclick 的单引号字符串里，
+    // 而 encodeURIComponent 并不转义单引号 —— 主题里带一个单引号就能闭合字符串注入脚本。
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (!t || typeof t.closest !== 'function') return;
+
+        var closer = t.closest('[data-modal-close]');
+        if (closer) { hideModal(); return; }
+
+        var themeBtn = t.closest('[data-theme-opt]');
+        if (themeBtn) {
+            if (window.__cfmailTheme) window.__cfmailTheme.set(themeBtn.getAttribute('data-theme-opt'));
+            return;
+        }
+
+        var quick = t.closest('[data-quick]');
+        if (quick) {
+            e.preventDefault();
+            e.stopPropagation();
+            runQuick(quick.getAttribute('data-quick'), quick.getAttribute('data-key'));
+            return;
+        }
+
+        var copyBtn = t.closest('[data-copy]');
+        if (copyBtn) {
+            e.preventDefault();
+            copyText(copyBtn.getAttribute('data-copy'), copyBtn.getAttribute('data-copy-label') || '内容');
+            return;
+        }
+
+        // ⚠️ 绝不能用「祖先里有 form 就跳过」来判断交互控件：
+        //    邮件行本身就位于 <form id="batch-form"> 内部，closest('form') 永远命中，
+        //    结果是整行点击被吞掉、邮件永远打不开。
+        //    必须先把 target 归到行上，再判断它是不是行内真正的控件。
+        var row = t.closest('.row');
+        if (!row || !row.dataset.key) return;
+        if (t.closest('a, button, input, label, select, textarea, iframe')) return;
+        window.location.href = '/email/' + row.dataset.key;
+    });
+
+    document.addEventListener('change', function (e) {
+        var t = e.target;
+        if (t && t.type === 'checkbox' && t.name === 'keys' && t.form && t.form.id === 'batch-form') updateRowStyle(t);
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (modalState.open) {
+            if (e.key === 'Escape') { e.preventDefault(); hideModal(); return; }
+            if (e.key !== 'Tab') return;
+            var card = $('modal-panel');
+            if (!card) return;
+            var focusables = card.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (!focusables.length) return;
+            var first = focusables[0], last = focusables[focusables.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+            return;
+        }
+        // "/" 聚焦搜索框，Esc 退出搜索 —— 邮件客户端里最省事的一组快捷键。
+        var el = e.target;
+        var tag = (el && el.tagName || '').toLowerCase();
+        var typing = tag === 'input' || tag === 'textarea' || (el && el.isContentEditable);
+        if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            var search = $('search-input');
+            if (search) { e.preventDefault(); search.focus(); search.select(); }
+            return;
+        }
+        if (e.key === 'Escape' && typing && tag === 'input' && el.type === 'search') {
+            el.value = '';
+            el.blur();
+        }
+    });
+
+    /* ---------- 正文 iframe 高度回报 ---------- */
+    // 邮件正文渲染在沙箱 iframe 里，由它 postMessage 回报正文容器高度，父页面据此调整高度。
+    // 校验 e.source === frame.contentWindow，避免页面内其它来源伪造高度。
+    //
+    // ⚠️ 高度必须「原样采用」，绝不能加固定增量。iframe 高度会决定它内部视口的高度，
+    //    而 documentElement.scrollHeight 被视口高度托底 —— 一旦在这里加常数，
+    //    就会形成「视口变高 → 测得更高 → iframe 再变高」的正反馈，
+    //    表现为打开邮件后正文下方无限空白（实测 4 秒能涨 1700px 以上）。
+    //
+    // ⚠️ 还有一类内容用上面的办法治不好：正文里带 vh 单位（例如 <div style="min-height:100vh">）。
+    //    vh 天然绑定视口高度，而视口高度正是我们在设的值 —— 这类内容不存在不动点，
+    //    高度会以固定步长匀速爬升。真实内容不会「等幅」增长（图片陆续加载的步长是参差的），
+    //    所以连续 3 次等幅递增就判定为反馈环并停止跟随。窗口尺寸变化时重置判定。
+    var appliedHeight = -1;
+    var lastStep = 0;
+    var sameStep = 0;
+    window.addEventListener('resize', function () { lastStep = 0; sameStep = 0; });
+
+    window.addEventListener('message', function (e) {
+        var d = e.data;
+        if (!d || typeof d.__cfmailHeight !== 'number') return;
+        var frame = $('mail-frame');
+        if (!frame || e.source !== frame.contentWindow) return;
+        var h = Math.min(Math.max(Math.ceil(d.__cfmailHeight), 120), 20000);
+
+        // 顺手收起正文骨架。不能只靠 iframe 的 load 事件：iframe 在 HTML 解析到它时就开始加载，
+        // 而监听器要等脚本执行才挂上 —— 邮件够小的话 load 会先到，事件就被错过了，
+        // 骨架会一直盖在正文上直到超时兜底。子页面每次回报高度都说明它已经渲染出内容，
+        // 用这个信号收起骨架是最稳的。
+        var loader = $('frame-load');
+        if (loader && !loader.hidden) loader.hidden = true;
+
+        if (h === appliedHeight) return;
+        var step = appliedHeight > 0 ? h - appliedHeight : 0;
+        if (step > 0 && step <= 64 && step === lastStep) {
+            if (++sameStep >= 3) return;
+        } else {
+            sameStep = 0;
+        }
+        lastStep = step;
+        appliedHeight = h;
+        frame.style.height = h + 'px';
+    });
+
+    /* ---------- 新邮件轮询 ---------- */
+    function checkNew() {
+        if (document.hidden) return;
+        fetch('/api/check', { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) {
+                if (d && d.latest > LATEST_TS) {
+                    toast('检测到新邮件，正在刷新…');
+                    setTimeout(function () { window.location.reload(); }, 1400);
+                }
+            })
+            .catch(function () {});
+    }
+
+    if (window.location.pathname === '/' && LATEST_TS > 0) {
+        setInterval(checkNew, 15000);
+        // 切回标签页时立刻查一次：后台标签页的定时器会被浏览器节流，
+        // 只靠 interval 的话用户切回来还要等一整个周期。
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) checkNew(); });
+    }
+
+    /* ---------- 初始化 ---------- */
+    function boot() {
+        hydrateTimes();
+        groupDays();
+        syncTheme();
+        updateToolbar();
+    }
+    document.addEventListener('DOMContentLoaded', boot);
+    if (document.readyState !== 'loading') boot();
+})();
+</script>
+</body>
+</html>`;
 };
 
-const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="current-password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
+const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>登录 · CF Mail</title>
+${THEME_BOOT}
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f14" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/logo.svg">
+<link rel="stylesheet" href="/app.css?v=${UI_VERSION}">
+</head>
+<body>
+<main class="auth">
+    <div class="auth-card">
+        <div class="auth-body">
+            <div class="auth-head">
+                ${brandMark('auth-mark')}
+                <h1>欢迎回来</h1>
+                <p class="auth-sub">登录以查看你的 Cloudflare 邮箱</p>
+            </div>
+            ${error ? '<div class="alert error" role="alert">' + Icons.alert + '<span>' + escapeHtml(error) + '</span></div>' : ''}
+            <form class="auth-form" method="POST" id="login-form">
+                <div class="field">
+                    <label class="label" for="username">用户名</label>
+                    <div class="input-wrap">
+                        <span class="lead">${Icons.user}</span>
+                        <input class="input has-lead" id="username" type="text" name="username" autocomplete="username" placeholder="请输入用户名" required autofocus>
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="label" for="password">密码</label>
+                    <div class="input-wrap">
+                        <span class="lead">${Icons.lock}</span>
+                        <input class="input has-lead" id="password" type="password" name="password" autocomplete="current-password" placeholder="••••••••" required>
+                        <span class="trail">
+                            <button type="button" class="iconbtn" data-pw-toggle="password" aria-label="显示密码" title="显示密码">${Icons.eye}</button>
+                        </span>
+                    </div>
+                    <p class="hint warn" id="caps-hint" hidden>大写锁定已开启</p>
+                </div>
+                ${siteKey ? '<div class="turnstile-wrap"><div class="cf-turnstile" data-sitekey="' + escapeAttr(siteKey) + '" data-theme="auto"></div></div>' : ''}
+                <button type="submit" class="btn primary lg block" id="login-btn"><span id="login-btn-label">登录</span></button>
+            </form>
+        </div>
+        <div class="auth-foot">Powered by Cloudflare Workers</div>
+    </div>
+</main>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<script>
+(function () {
+    'use strict';
+    var EYE = ${jsonForScript(Icons.eye)};
+    var EYE_OFF = ${jsonForScript(Icons.eyeOff)};
 
-const renderSetup = (error = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>系统初始化</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleSetup(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 创建中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='完成设置并登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎使用</h1><p class="text-sm text-gray-500 mt-2">首次部署，请设置管理员账号</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" action="/setup" class="space-y-5" onsubmit="return handleSetup(document.getElementById('setupBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">管理员用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">管理员密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="new-password" minlength="8" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="至少 8 位" required></div><p class="text-xs text-gray-400 ml-1">密码至少 8 位，创建后即可登录</p></div><button type="submit" id="setupBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">完成设置并登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
+    var form = document.getElementById('login-form');
+    var btn = document.getElementById('login-btn');
+    var label = document.getElementById('login-btn-label');
+    if (form) {
+        form.addEventListener('submit', function () {
+            if (!btn) return;
+            btn.disabled = true;
+            if (label) label.textContent = '登录中…';
+            setTimeout(function () { btn.disabled = false; if (label) label.textContent = '登录'; }, 6000);
+        });
+    }
+
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (!t || typeof t.closest !== 'function') return;
+        var toggle = t.closest('[data-pw-toggle]');
+        if (!toggle) return;
+        var input = document.getElementById(toggle.getAttribute('data-pw-toggle'));
+        if (!input) return;
+        var show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        toggle.innerHTML = show ? EYE_OFF : EYE;
+        toggle.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
+        toggle.setAttribute('title', show ? '隐藏密码' : '显示密码');
+        input.focus();
+    });
+
+    // 大写锁定是最常见的「密码明明对却登不上」来源，直接在输入框下面说出来。
+    var pw = document.getElementById('password');
+    var caps = document.getElementById('caps-hint');
+    if (pw && caps) {
+        function check(e) {
+            try { caps.hidden = !(e.getModifierState && e.getModifierState('CapsLock')); }
+            catch (err) { caps.hidden = true; }
+        }
+        pw.addEventListener('keyup', check);
+        pw.addEventListener('keydown', check);
+        pw.addEventListener('blur', function () { caps.hidden = true; });
+    }
+})();
+</script>
+</body>
+</html>`;
+
+const renderSetup = (error = "") => `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>初始化 · CF Mail</title>
+${THEME_BOOT}
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0f14" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/logo.svg">
+<link rel="stylesheet" href="/app.css?v=${UI_VERSION}">
+</head>
+<body>
+<main class="auth">
+    <div class="auth-card">
+        <div class="auth-body">
+            <div class="auth-head">
+                ${brandMark('auth-mark')}
+                <h1>欢迎使用</h1>
+                <p class="auth-sub">首次部署，请设置管理员账号</p>
+            </div>
+            ${error ? '<div class="alert error" role="alert">' + Icons.alert + '<span>' + escapeHtml(error) + '</span></div>' : ''}
+            <form class="auth-form" method="POST" action="/setup" id="setup-form">
+                <div class="field">
+                    <label class="label" for="username">管理员用户名</label>
+                    <div class="input-wrap">
+                        <span class="lead">${Icons.user}</span>
+                        <input class="input has-lead" id="username" type="text" name="username" autocomplete="username" placeholder="请输入用户名" required autofocus>
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="label" for="password">管理员密码</label>
+                    <div class="input-wrap">
+                        <span class="lead">${Icons.lock}</span>
+                        <input class="input has-lead" id="password" type="password" name="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" required>
+                        <span class="trail">
+                            <button type="button" class="iconbtn" data-pw-toggle="password" aria-label="显示密码" title="显示密码">${Icons.eye}</button>
+                        </span>
+                    </div>
+                    <p class="hint" id="caps-hint" hidden>大写锁定已开启</p>
+                </div>
+                <div class="field">
+                    <label class="label" for="confirm">确认密码</label>
+                    <div class="input-wrap">
+                        <span class="lead">${Icons.lock}</span>
+                        <input class="input has-lead" id="confirm" type="password" autocomplete="new-password" minlength="8" placeholder="再输入一次" required>
+                    </div>
+                </div>
+                <p class="hint" id="setup-hint">密码至少 8 位，创建后即可登录。这个密码是唯一的入口，忘记后需要清空存储重新初始化。</p>
+                <button type="submit" class="btn primary lg block" id="setup-btn"><span id="setup-btn-label">完成设置并登录</span></button>
+            </form>
+        </div>
+        <div class="auth-foot">Powered by Cloudflare Workers</div>
+    </div>
+</main>
+<script>
+(function () {
+    'use strict';
+    var EYE = ${jsonForScript(Icons.eye)};
+    var EYE_OFF = ${jsonForScript(Icons.eyeOff)};
+
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (!t || typeof t.closest !== 'function') return;
+        var toggle = t.closest('[data-pw-toggle]');
+        if (!toggle) return;
+        var input = document.getElementById(toggle.getAttribute('data-pw-toggle'));
+        if (!input) return;
+        var show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        toggle.innerHTML = show ? EYE_OFF : EYE;
+        toggle.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
+        toggle.setAttribute('title', show ? '隐藏密码' : '显示密码');
+        input.focus();
+    });
+
+    var form = document.getElementById('setup-form');
+    var pw = document.getElementById('password');
+    var confirm = document.getElementById('confirm');
+    var hint = document.getElementById('setup-hint');
+    var caps = document.getElementById('caps-hint');
+
+    function setHint(text, kind) {
+        if (!hint) return;
+        hint.textContent = text;
+        hint.className = 'hint' + (kind ? ' ' + kind : '');
+    }
+
+    // 本地先比一次：密码是唯一入口，打错一个字符就要清空存储重来，
+    // 让用户在提交之前就发现自己少敲了。
+    function matches() {
+        if (!pw || !confirm) return true;
+        return !confirm.value || pw.value === confirm.value;
+    }
+
+    if (pw && confirm) {
+        confirm.addEventListener('input', function () {
+            if (!confirm.value) setHint('密码至少 8 位，创建后即可登录。');
+            else if (pw.value === confirm.value) setHint('两次输入一致。', 'ok');
+            else setHint('两次输入的密码不一致。', 'bad');
+        });
+        pw.addEventListener('input', function () { if (confirm.value) confirm.dispatchEvent(new Event('input')); });
+    }
+
+    if (pw && caps) {
+        function check(e) {
+            try { caps.hidden = !(e.getModifierState && e.getModifierState('CapsLock')); }
+            catch (err) { caps.hidden = true; }
+        }
+        pw.addEventListener('keyup', check);
+        pw.addEventListener('keydown', check);
+        pw.addEventListener('blur', function () { caps.hidden = true; });
+    }
+
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            if (!matches()) {
+                e.preventDefault();
+                setHint('两次输入的密码不一致，请检查后再提交。', 'bad');
+                if (confirm) confirm.focus();
+                return;
+            }
+            var btn = document.getElementById('setup-btn');
+            var label = document.getElementById('setup-btn-label');
+            if (btn) btn.disabled = true;
+            if (label) label.textContent = '创建中…';
+        });
+    }
+})();
+</script>
+</body>
+</html>`;
 
 // ==========================================
 // 4. 业务逻辑与路由
@@ -1159,14 +2155,9 @@ function maskSecret(value) {
 const SOURCE_TEXT = { settings: '应用内已配置', env: '来自环境变量', none: '未配置' };
 
 function sourceBadge(source) {
-    const styles = {
-        settings: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-        env: 'bg-blue-50 text-blue-700 border-blue-200',
-        none: 'bg-gray-100 text-gray-500 border-gray-200'
-    };
-    const cls = styles[source] || styles.none;
+    const variant = source === 'settings' ? 'ok' : (source === 'env' ? 'info' : '');
     const text = SOURCE_TEXT[source] || SOURCE_TEXT.none;
-    return '<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-xs font-medium ' + cls + '">' + text + '</span>';
+    return '<span class="badge ' + variant + '">' + text + '</span>';
 }
 
 function renderSettings(settings, turnstile, forward, opts) {
@@ -1178,97 +2169,146 @@ function renderSettings(settings, turnstile, forward, opts) {
 
     let alertHtml = '';
     if (o.error) {
-        alertHtml = '<div class="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl">' + escapeHtml(o.error) + '</div>';
+        alertHtml = '<div class="alert error" role="alert">' + Icons.alert + '<span>' + escapeHtml(o.error) + '</span></div>';
     } else if (o.notice) {
-        alertHtml = '<div class="mb-6 p-4 bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm rounded-xl">' + escapeHtml(o.notice) + '</div>';
+        alertHtml = '<div class="alert ok" role="status">' + Icons.check + '<span>' + escapeHtml(o.notice) + '</span></div>';
     }
 
+    // 状态用一句人话讲清楚「现在到底会不会弹验证码」，而不是只给一个「已配置」的徽章。
     const turnstileState = turnstile.enabled
-        ? '<span class="text-emerald-700 font-medium">已启用</span>，登录页会显示人机验证'
-        : '<span class="text-gray-500 font-medium">未启用</span>，登录页会跳过人机验证';
+        ? '<b>已启用</b>：登录页会显示人机验证，服务端会校验 token。'
+        : '<b>未启用</b>：登录页不显示验证码，服务端跳过校验。';
+
+    const themeSeg = '<div class="seg" role="group" aria-label="外观主题">'
+        + '<button type="button" class="seg-btn" data-theme-opt="light" aria-pressed="false">' + Icons.sun + '<span>浅色</span></button>'
+        + '<button type="button" class="seg-btn" data-theme-opt="dark" aria-pressed="false">' + Icons.moon + '<span>深色</span></button>'
+        + '<button type="button" class="seg-btn" data-theme-opt="auto" aria-pressed="false">' + Icons.auto + '<span>跟随系统</span></button>'
+        + '</div>';
 
     return `
-    <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-        <div class="flex items-center px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm">
-            <a href="/" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a>
-            <h1 class="text-lg sm:text-xl font-bold text-gray-800 ml-1">设置</h1>
+    <div class="panel">
+        <div class="topbar">
+            <a class="iconbtn" href="/" aria-label="返回收件箱" title="返回收件箱">${Icons.back}</a>
+            <h1>设置</h1>
         </div>
-        <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar">
-            <div class="p-4 sm:p-8 max-w-3xl mx-auto safe-bottom space-y-6">
+        <div class="doc">
+            <div class="doc-inner">
                 ${alertHtml}
-                <p class="text-sm text-gray-500 leading-relaxed">
-                    配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。
-                    这里的配置<b class="text-gray-700">优先于</b> Dashboard 上配置的同名环境变量。
-                </p>
+                <div class="stack">
+                    <p class="hint">配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。这里的配置<b>优先于</b> Dashboard 上配置的同名环境变量。</p>
 
-                <form method="POST" action="/settings" class="space-y-6">
-                    <section class="border border-gray-200 rounded-xl p-5">
-                        <div class="flex items-center justify-between mb-1">
-                            <h2 class="font-semibold text-gray-900">邮件转发</h2>
-                            ${sourceBadge(forward.source)}
-                        </div>
-                        <p class="text-xs text-gray-500 mb-3">邮件存入 R2 成功后，自动转发一份到这个邮箱。留空表示不转发。</p>
-                        <input type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com"
-                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                    </section>
+                    <form method="POST" action="/settings" class="stack">
+                        <section class="card">
+                            <div class="card-head">
+                                <h2>邮件转发</h2>
+                                ${sourceBadge(forward.source)}
+                            </div>
+                            <p class="card-desc">邮件成功存入 R2 后，自动转发一份到这个邮箱。留空表示不转发，改完即刻生效。</p>
+                            <div class="field">
+                                <label class="label" for="forward_email">转发地址</label>
+                                <input class="input" id="forward_email" type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com">
+                            </div>
+                        </section>
 
-                    <section class="border border-gray-200 rounded-xl p-5">
-                        <div class="flex items-center justify-between mb-1">
-                            <h2 class="font-semibold text-gray-900">人机验证 · Cloudflare Turnstile</h2>
-                            ${sourceBadge(turnstile.source)}
-                        </div>
-                        <p class="text-xs text-gray-500 mb-4">当前状态：${turnstileState}。<br>两个 Key 必须<b>成对填写</b>；只填一个不会生效，也不会把你自己锁在门外。</p>
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Site Key</label>
-                        <input type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx"
-                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all mb-4">
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Secret Key</label>
-                        <input type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}"
-                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        <p class="text-xs text-gray-400 mt-2">Secret Key 只保存在 R2，不会回显。留空表示保持原值不变。</p>
-                    </section>
+                        <section class="card">
+                            <div class="card-head">
+                                <h2>人机验证 · Cloudflare Turnstile</h2>
+                                ${sourceBadge(turnstile.source)}
+                            </div>
+                            <p class="card-desc">当前状态：${turnstileState}<br>两个 Key 必须<b>成对填写</b>：只填一个不会生效，也不会把你自己锁在门外。</p>
+                            <div class="stack tight">
+                                <div class="field">
+                                    <label class="label" for="turnstile_site_key">Site Key</label>
+                                    <input class="input" id="turnstile_site_key" type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx">
+                                </div>
+                                <div class="field">
+                                    <label class="label" for="turnstile_secret_key">Secret Key</label>
+                                    <input class="input" id="turnstile_secret_key" type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}">
+                                    <p class="hint">Secret Key 只保存在 R2，永远不回显。留空表示保持原值不变。</p>
+                                </div>
+                            </div>
+                        </section>
 
-                    <div class="flex items-center gap-3">
-                        <button type="submit" class="px-5 py-3 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 active:scale-[0.98] transition-all">保存设置</button>
-                        <a href="/settings" class="px-5 py-3 text-gray-600 font-medium rounded-xl hover:bg-gray-100 transition-colors">放弃修改</a>
-                    </div>
-                </form>
-
-                <form method="POST" action="/settings/password" class="space-y-4 border border-gray-200 rounded-xl p-5">
-                    <div>
-                        <h2 class="font-semibold text-gray-900 mb-1">修改密码</h2>
-                        <p class="text-xs text-gray-500">更新后<b class="text-gray-700">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
-                    </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">当前密码</label>
-                            <input type="password" name="current_password" autocomplete="current-password" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                        <div class="settings-actions">
+                            <button type="submit" class="btn primary">保存设置</button>
+                            <a href="/settings" class="btn ghost">放弃修改</a>
                         </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">新密码</label>
-                            <input type="password" name="new_password" autocomplete="new-password" minlength="8" required placeholder="至少 8 位" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">确认新密码</label>
-                            <input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        </div>
-                    </div>
-                    <button type="submit" class="px-5 py-3 bg-gray-900 text-white rounded-xl font-semibold hover:bg-gray-800 active:scale-[0.98] transition-all">更新密码</button>
-                </form>
-
-                <section class="border border-red-100 bg-red-50/40 rounded-xl p-5">
-                    <h2 class="font-semibold text-gray-900 mb-1">危险操作</h2>
-                    <p class="text-xs text-gray-500 mb-3">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
-                    <form method="POST" action="/settings/clear-turnstile">
-                        <button type="submit" onclick="return askClear(this)" class="px-4 py-2.5 bg-white border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors active:scale-[0.98]">清空 Turnstile 密钥</button>
                     </form>
-                </section>
 
-                <p class="text-xs text-gray-400 leading-relaxed">
-                    提示：Turnstile 的 Site Key 是服务端渲染进登录页的，保存后<b>下次打开登录页</b>生效。
-                </p>
+                    <section class="card">
+                        <div class="card-head">
+                            <h2>外观</h2>
+                            <span class="badge">仅本机</span>
+                        </div>
+                        <p class="card-desc">只保存在当前浏览器，不会上传到服务器。</p>
+                        ${themeSeg}
+                    </section>
+
+                    <form method="POST" action="/settings/password" class="card stack" id="pw-form">
+                        <div>
+                            <div class="card-head">
+                                <h2>修改密码</h2>
+                                <span class="badge info">${Icons.shield}<span>会话轮换</span></span>
+                            </div>
+                            <p class="card-desc">更新后<b>其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
+                        </div>
+                        <div class="pw-grid">
+                            <div class="field">
+                                <label class="label" for="current_password">当前密码</label>
+                                <input class="input" id="current_password" type="password" name="current_password" autocomplete="current-password" required>
+                            </div>
+                            <div class="field">
+                                <label class="label" for="new_password">新密码</label>
+                                <input class="input" id="new_password" type="password" name="new_password" autocomplete="new-password" minlength="8" required placeholder="至少 8 位">
+                            </div>
+                            <div class="field">
+                                <label class="label" for="confirm_password">确认新密码</label>
+                                <input class="input" id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" minlength="8" required>
+                            </div>
+                        </div>
+                        <p class="hint" id="pw-hint">新密码不得少于 8 位，且不能与当前密码相同。</p>
+                        <div class="settings-actions">
+                            <button type="submit" class="btn solid-dark">更新密码</button>
+                        </div>
+                    </form>
+
+                    <section class="card card-danger">
+                        <div class="card-head">
+                            <h2>危险操作</h2>
+                        </div>
+                        <p class="card-desc">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
+                        <form method="POST" action="/settings/clear-turnstile">
+                            <button type="submit" onclick="return askClear(this)" class="btn danger-soft">清空 Turnstile 密钥</button>
+                        </form>
+                    </section>
+
+                    <p class="hint">Turnstile 的 Site Key 由服务端渲染进登录页，保存后<b>下次打开登录页</b>生效。</p>
+                </div>
             </div>
         </div>
-    </div>`;
+    </div>
+    <script>
+    (function () {
+        'use strict';
+        var pw = document.getElementById('new_password');
+        var confirm = document.getElementById('confirm_password');
+        var hint = document.getElementById('pw-hint');
+        var base = '新密码不得少于 8 位，且不能与当前密码相同。';
+        function set(text, kind) {
+            if (!hint) return;
+            hint.textContent = text;
+            hint.className = 'hint' + (kind ? ' ' + kind : '');
+        }
+        // 提交之前就把「两次不一致」指出来，省掉一次 400 往返和整页重绘。
+        function check() {
+            if (!pw || !confirm || !confirm.value) { set(base); return; }
+            if (pw.value === confirm.value) set('两次输入一致。', 'ok');
+            else set('两次输入的密码不一致。', 'bad');
+        }
+        if (pw) pw.addEventListener('input', check);
+        if (confirm) confirm.addEventListener('input', check);
+    })();
+    </script>`;
 }
 
 // ---------- 邮件正文沙箱文档 ----------
@@ -1303,14 +2343,22 @@ function stripActiveContent(html) {
 
 // ⚠️ 高度上报的取值对象必须是「内容容器」而不是 documentElement，理由见 FRAME_HEIGHT_SCRIPT。
 //    配套约束：html / body 必须保持 height:auto，否则内容容器会被视口高度拉伸。
+// ⚠️ 高度上报的取值对象必须是「内容容器」而不是 documentElement，理由见 FRAME_HEIGHT_SCRIPT。
+//    配套约束：html / body 必须保持 height:auto，否则内容容器会被视口高度拉伸。
+//
+//    正文一律保持浅色（color-scheme:light + 白底）：邮件是按白底排版的，
+//    在深色主题里把它反色会毁掉图片、表格底色和 logo。
+//    深色主题下靠外层的边框与圆角把这块白「框」住，看起来是刻意的留白而不是漏了样式。
 const FRAME_CSS = 'html,body{height:auto !important;min-height:0 !important;max-height:none !important;margin:0 !important;padding:0 !important}'
     + 'html{color-scheme:light}'
-    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.7;color:#1f2937;word-break:break-word;overflow-wrap:anywhere}'
+    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;font-size:15px;line-height:1.7;color:#1f2937;background:#fff;word-break:break-word;overflow-wrap:anywhere}'
     + '#mail-root{padding:0 2px 20px}'
     + 'img{max-width:100%;height:auto}table{max-width:100%}'
     + 'blockquote{margin:0;padding-left:.8rem;border-left:3px solid #e5e7eb;color:#6b7280}'
     + 'a{color:#4f46e5}'
-    + 'pre.plain{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit}';
+    + 'hr{border:0;border-top:1px solid #e5e7eb;margin:1.2em 0}'
+    + 'pre.plain{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit}'
+    + '@media (max-width:560px){body{font-size:14.5px}}';
 
 // 唯一的内联脚本：向父页面回报正文容器的真实高度，父页面据此调整 iframe 高度。
 //
@@ -1321,10 +2369,18 @@ const FRAME_CSS = 'html,body{height:auto !important;min-height:0 !important;max-
 //    用户看到的就是「打开邮件后下方无限空白」。
 //    两道保险：① 只测 #mail-root（内容驱动，与视口无关）；② 父页面原样采用、不加常数。
 //    另外用 last 去重，避免同一高度反复 postMessage。
+//
+// ⚠️ 第二个坑（实测出来的）：iframe 在 HTML 解析到它时就开始加载，而它此时**还没有宽度**
+//    （父页面的样式表可能仍在加载，iframe 的盒子还是默认尺寸）。子页面在这个时刻测量，
+//    文字会被折成 1 个字一行，量出来的高度能到 3 万多像素 —— 父页面一旦采用，页面会先
+//    猛地撑开再缩回去。所以宽度没定下来之前直接不报：宽度本身没有意义，基于它算出的高度更没有。
+//    ResizeObserver 与 resize 事件会在宽度落定后重新触发测量。
 const FRAME_HEIGHT_SCRIPT = '(function(){'
     + 'var root=document.getElementById("mail-root")||document.body,last=-1;'
-    + 'function s(){var r=root.getBoundingClientRect?root.getBoundingClientRect().height:0;'
-    + 'var h=Math.ceil(Math.max(root.scrollHeight||0,r));'
+    + 'function s(){'
+    + 'var box=root.getBoundingClientRect?root.getBoundingClientRect():{width:0,height:0};'
+    + 'if(!box.width||box.width<80)return;'
+    + 'var h=Math.ceil(Math.max(root.scrollHeight||0,box.height));'
     + 'if(h===last)return;last=h;'
     + 'try{parent.postMessage({__cfmailHeight:h},"*")}catch(e){}}'
     + 'window.addEventListener("load",s);window.addEventListener("resize",s);'
@@ -1353,6 +2409,12 @@ function buildFrameDocument(email) {
 // ---------- 邮件详情渲染 ----------
 // 收件箱与回收站两条分支共用这一份，避免改一处漏一处。
 
+// 附件图标：图片类给一个图片图标，其余统一用文档图标。
+// 一眼能分辨「这是一张图」比清一色的回形针有用得多。
+function attachmentIcon(mime) {
+    return String(mime || '').toLowerCase().indexOf('image/') === 0 ? Icons.image : Icons.file;
+}
+
 function renderEmailDetail(email, key, isTrash, uploaded) {
     const fromRaw = String(email.headers['from'] || '');
     const senderName = (fromRaw.split('<')[0] || '').trim().replace(/"/g, '') || '未知发件人';
@@ -1368,102 +2430,116 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
     // 普通邮件不留任何多余文字 —— 常驻一句「已剥离脚本」对 99% 的邮件毫无信息量，
     // 而且「已被剥离」的措辞容易被读成「邮件坏了」。这里只在真的发生过剥离时解释一句。
     const strippedNotice = (email.html && stripActiveContent(email.html).removed)
-        ? `<p class="mt-3 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">这封邮件含有脚本或内联事件，已为安全起见移除；正文其余内容不受影响。</p>`
+        ? '<div class="note">' + Icons.shield + '<span>这封邮件含有脚本或内联事件，已为安全起见移除；正文其余内容不受影响。</span></div>'
         : '';
 
     let attachmentsHtml = '';
     if (email.attachments.length > 0) {
         attachmentsHtml = `
-        <div class="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4">
-            <div class="flex items-center text-sm font-semibold text-gray-700 mb-3">${Icons.attach}<span class="ml-2">附件 (${email.attachments.length})</span></div>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="attach">
+            <div class="attach-head">${Icons.attach}<span>附件 ${email.attachments.length} 个</span></div>
+            <div class="attach-grid">
                 ${email.attachments.map((att, index) => `
-                <div class="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div class="flex items-center min-w-0 flex-1 mr-2">
-                        <div class="bg-indigo-100 text-indigo-600 rounded-md p-1.5 mr-3 flex-shrink-0">${Icons.file}</div>
-                        <div class="min-w-0">
-                            <p class="text-sm font-medium text-gray-900 truncate" title="${escapeAttr(att.filename)}">${escapeHtml(att.filename)}</p>
-                            <p class="text-xs text-gray-500">${escapeHtml(att.sizeStr)}</p>
-                        </div>
+                <div class="attach-item">
+                    <div class="attach-ic">${attachmentIcon(att.mime)}</div>
+                    <div class="grow">
+                        <div class="attach-name" title="${escapeAttr(att.filename)}">${escapeHtml(att.filename)}</div>
+                        <div class="attach-size">${escapeHtml(att.sizeStr)}</div>
                     </div>
-                    <a href="/attachment/${encodedKey}/${index}" download="${escapeAttr(att.filename)}" class="text-indigo-600 hover:text-indigo-800 p-2 hover:bg-indigo-50 rounded-full transition active:scale-95" title="下载附件">${Icons.download}</a>
+                    <a class="iconbtn" href="/attachment/${encodedKey}/${index}" download="${escapeAttr(att.filename)}" title="下载附件" aria-label="下载附件 ${escapeAttr(att.filename)}">${Icons.download}</a>
                 </div>`).join('')}
             </div>
         </div>`;
     }
 
-    // 翻译按钮。译文由服务端调 Workers AI 生成，原文已是中文 / 语种不受支持时会在状态条上明确说明。
-    const translateBtn = `
-            <button id="translate-btn" onclick="translateMail()" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="把正文翻译成中文">${Icons.translate} <span class="ml-1">翻译</span></button>`;
+    // 翻译按钮。译文由服务端调 Workers AI 生成；原文已是中文 / 语种不受支持时会在状态条上明确说明。
+    const translateBtn = '<button type="button" id="translate-btn" class="btn soft" onclick="translateMail()" title="把正文翻译成中文">'
+        + Icons.translate + '<span class="lbl-wide">翻译</span></button>';
 
     // 下载原始邮件。归档备份、喂给别的客户端、排障看真实头部都用得上。
-    const rawBtn = `
-            <a href="/raw/${encodedKey}" download class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="下载原始邮件（.eml）">${Icons.download}<span class="ml-1 hidden sm:inline">原文</span></a>`;
+    // 标签写「下载原文」而不是「原文」：它紧挨着「翻译」，只写「原文」会被读成
+    // 「原文 / 译文」的视图切换，但这里其实是下载 .eml 文件，两回事。
+    const rawBtn = '<a class="btn ghost" href="/raw/' + encodedKey + '" download title="下载原始邮件（.eml）">'
+        + Icons.download + '<span class="lbl-wide">下载原文</span></a>';
 
-    const toolbar = isTrash ? `
-        <div class="flex items-center space-x-1 sm:space-x-2">
+    const toolbar = isTrash
+        ? `<div class="topbar-actions">
             ${translateBtn}
             ${rawBtn}
             <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
-                <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="btn ok-soft" title="恢复到收件箱">${Icons.restore}<span class="lbl-wide">恢复</span></button>
             </form>
             <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)">
-                <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.trash} <span class="ml-1">删除</span></button>
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="btn danger-soft" title="彻底删除">${Icons.trash}<span class="lbl-wide">删除</span></button>
             </form>
-        </div>` : `
-        <div class="flex items-center space-x-1 sm:space-x-2">
+        </div>`
+        : `<div class="topbar-actions">
             ${translateBtn}
             ${rawBtn}
-            <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${escapeAttr(key)}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>
+            <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')">
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="iconbtn danger" title="移入回收站" aria-label="移入回收站">${Icons.trash}</button>
+            </form>
         </div>`;
 
     return `
-    <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-        <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm">
-            <div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>
+    <div class="panel">
+        <div class="topbar">
+            <a class="iconbtn" href="${isTrash ? '/trash' : '/'}" title="返回列表" aria-label="返回列表">${Icons.back}</a>
+            <h1>${escapeHtml(subject)}</h1>
             ${toolbar}
         </div>
-        <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar">
-            <div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
-                <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${escapeHtml(subject)}</h1>
-                <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6">
-                    <div class="flex items-center overflow-hidden">
-                        <div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div>
-                        <div class="ml-3 sm:ml-4 min-w-0">
-                            <div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${escapeHtml(senderName)}</div>
-                            <div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${escapeHtml(senderEmail)}&gt;</div>
+        <div class="doc">
+            <div class="doc-inner">
+                <h2 class="subject">${escapeHtml(subject)}</h2>
+                <div class="sender">
+                    <div class="avatar lg ${avatarColor}" aria-hidden="true">${initial}</div>
+                    <div class="grow">
+                        <div class="sender-name truncate">${escapeHtml(senderName)}</div>
+                        <div class="sender-mail">
+                            <a href="mailto:${escapeAttr(senderEmail)}" title="${escapeAttr(senderEmail)}">${escapeHtml(senderEmail)}</a>
+                            <button type="button" class="iconbtn" data-copy="${escapeAttr(senderEmail)}" data-copy-label="发件人地址" title="复制地址" aria-label="复制发件人地址">${Icons.copy}</button>
                         </div>
                     </div>
-                    <div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1"><time data-ts="${Number.isFinite(uploadedTs) ? uploadedTs : 0}" data-fmt="full" datetime="${escapeAttr(uploadedIso)}"></time></div>
+                    <time class="sender-time" data-ts="${Number.isFinite(uploadedTs) ? uploadedTs : 0}" data-fmt="full" datetime="${escapeAttr(uploadedIso)}"></time>
                 </div>
                 ${attachmentsHtml}
-                <div id="translate-status" class="hidden"></div>
+                <div id="translate-status" class="alert info" hidden></div>
                 <div id="mail-original">
-                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
+                    <div class="frame-wrap">
+                        <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" style="height:320px"></iframe>
+                        <div class="frame-load" id="frame-load">${Icons.spinner}<span>正在载入正文…</span></div>
+                    </div>
                     ${strippedNotice}
                 </div>
-                <div id="mail-translated" class="hidden">
-                    <div id="translate-body" class="text-[15px] leading-relaxed text-gray-800 whitespace-pre-wrap break-words select-text bg-indigo-50/40 border border-indigo-100 rounded-xl p-4 sm:p-5"></div>
-                    <p class="mt-3 text-xs text-gray-400">译文由 Workers AI 生成，仅供快速浏览；排版、链接与图片请以原文为准。</p>
+                <div id="mail-translated" hidden>
+                    <div class="translated" id="translate-body"></div>
+                    <div class="toolbar-inline">
+                        <button type="button" class="btn ghost" id="copy-translated">${Icons.copy}<span>复制译文</span></button>
+                    </div>
+                    <p class="note">译文由 Workers AI 生成，仅供快速浏览；排版、链接与图片请以原文为准。</p>
                 </div>
             </div>
         </div>
     </div>
     <script>
     (function () {
+        'use strict';
         var KEY = ${jsonForScript(key)};
         var translated = null;
         var view = 'original';
+
         function el(id) { return document.getElementById(id); }
 
         function setStatus(text, kind) {
             var box = el('translate-status');
             if (!box) return;
-            if (!text) { box.className = 'hidden'; box.textContent = ''; return; }
-            box.className = 'mb-4 px-4 py-3 rounded-xl text-sm border ' + (kind === 'error'
-                ? 'bg-red-50 border-red-100 text-red-600'
-                : 'bg-indigo-50 border-indigo-100 text-indigo-700');
+            if (!text) { box.hidden = true; box.textContent = ''; return; }
+            box.className = 'alert ' + (kind === 'error' ? 'error' : 'info');
             box.textContent = text;
+            box.hidden = false;
         }
 
         function setView(next) {
@@ -1474,12 +2550,12 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
             view = next;
             var label = btn ? btn.querySelector('span') : null;
             if (next === 'translated' && translated) {
-                original.classList.add('hidden');
-                panel.classList.remove('hidden');
+                original.hidden = true;
+                panel.hidden = false;
                 if (label) label.textContent = '显示原文';
             } else {
-                panel.classList.add('hidden');
-                original.classList.remove('hidden');
+                panel.hidden = true;
+                original.hidden = false;
                 if (label) label.textContent = translated ? '显示译文' : '翻译';
             }
         }
@@ -1491,7 +2567,6 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
 
             var label = btn.querySelector('span');
             btn.disabled = true;
-            btn.classList.add('opacity-60', 'cursor-not-allowed');
             if (label) label.textContent = '翻译中…';
             setStatus('正在翻译，长邮件可能需要十几秒…', 'info');
 
@@ -1522,9 +2597,22 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 if (label) label.textContent = '翻译';
             }).then(function () {
                 btn.disabled = false;
-                btn.classList.remove('opacity-60', 'cursor-not-allowed');
             });
         };
+
+        var copyBtn = el('copy-translated');
+        if (copyBtn) copyBtn.addEventListener('click', function () {
+            if (translated && window.cfCopyText) window.cfCopyText(translated, '译文');
+        });
+
+        // 正文载入完成前盖一层骨架，避免先看到一片空白再「跳」出内容。
+        // 加超时兜底：某些邮件正文里带了永不触发的资源，load 可能迟迟不来。
+        var frame = el('mail-frame');
+        var loader = el('frame-load');
+        if (frame && loader) {
+            frame.addEventListener('load', function () { loader.hidden = true; });
+            setTimeout(function () { loader.hidden = true; }, 6000);
+        }
     })();
     </script>`;
 }
@@ -1538,6 +2626,8 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === '/logo.svg') return assetResponse(renderAppIcon(), 'image/svg+xml; charset=utf-8');
     if (url.pathname === '/sw.js') return assetResponse(renderServiceWorker(), 'application/javascript; charset=utf-8');
     if (url.pathname === '/robots.txt') return textResponse('User-agent: *\nDisallow: /\n');
+    if (url.pathname === '/robots.txt') return textResponse('User-agent: *\nDisallow: /\n');
+    if (url.pathname === '/app.css') return assetResponse(APP_CSS, 'text/css; charset=utf-8');
 
     let config = null;
     try {
@@ -1950,9 +3040,12 @@ async function handleRequest(request, env, ctx) {
         }
 
         const email = processEmail(bufferToBinaryString(buffer));
+        // 带上主题，浏览器标签页 / 历史记录 / 书签里才看得出这是哪封邮件。
         return htmlResponse(renderLayout(
             renderEmailDetail(email, resolved.key, resolved.isTrash, resolved.obj.uploaded),
-            resolved.isTrash ? 'trash' : 'inbox'
+            resolved.isTrash ? 'trash' : 'inbox',
+            0,
+            { title: email.headers['subject'] || '(无主题)' }
         ));
     }
 
@@ -1986,10 +3079,10 @@ async function handleRequest(request, env, ctx) {
         const nextSize = Math.min(pageSize * 2, PAGE_SIZE_MAX);
         const hasMore = matched.length > shown.length;
 
-        // 未读计数（侧栏徽标）。已取到全量 metadata，顺手算出来，不额外开销。
+        // 未读计数（侧栏与底部导航的徽标）。已取到全量 metadata，顺手算出来，不额外开销。
         const unreadCount = isTrashPage ? 0 : emails.filter(o => o.customMetadata?.isRead !== 'true').length;
 
-        const listHtml = shown.map(e => {
+        const rows = shown.map(e => {
             const fullKey = e.key;
             const displayKey = displayKeyOf(e);
 
@@ -2001,76 +3094,118 @@ async function handleRequest(request, env, ctx) {
 
             const color = getAvatarColor(senderName);
             const ts = keyTimestamp(displayKey);
-
             const isRead = e.customMetadata?.isRead === 'true';
-            const fontWeight = isRead ? 'font-normal' : 'font-semibold';
-            const textColor = isRead ? 'text-gray-600' : 'text-gray-900';
-            const dotHtml = !isRead && !isTrashPage ? '<span class="unread-dot"></span>' : '';
 
             // 主题与发件人完全由发件人控制，必须转义后才能拼进 HTML。
-            // 行点击改成 data-key + 事件委托：原来拼进 onclick 单引号字符串里，
-            // 而 encodeURIComponent 不转义单引号，主题带一个单引号就能注入脚本。
+            // 行点击走 data-key + 事件委托：不能把键名拼进 onclick 的单引号字符串，
+            // 因为 encodeURIComponent 不转义单引号，主题里带一个单引号就能注入脚本。
+            //
+            // 快捷操作按钮用 data-quick，由委托处理，并且只作用于这一封 ——
+            // 不去动批量表单里用户已经勾选的其他邮件。
+            const quickActions = isTrashPage
+                ? '<button type="button" class="iconbtn" data-quick="restore" data-key="' + escapeAttr(fullKey) + '" title="恢复到收件箱" aria-label="恢复">' + Icons.restore + '</button>'
+                    + '<button type="button" class="iconbtn danger" data-quick="purge" data-key="' + escapeAttr(fullKey) + '" title="彻底删除" aria-label="彻底删除">' + Icons.trash + '</button>'
+                : '<button type="button" class="iconbtn" data-quick="' + (isRead ? 'mark_unread' : 'mark_read') + '" data-key="' + escapeAttr(fullKey) + '" title="' + (isRead ? '标为未读' : '标为已读') + '" aria-label="' + (isRead ? '标为未读' : '标为已读') + '">' + (isRead ? Icons.mail : Icons.mailOpen) + '</button>'
+                    + '<button type="button" class="iconbtn danger" data-quick="delete" data-key="' + escapeAttr(fullKey) + '" title="移入回收站" aria-label="移入回收站">' + Icons.trash + '</button>';
+
             return `
-            <div class="group email-row block bg-white hover:bg-gray-50 border-b border-gray-100 transition-all cursor-pointer relative select-none" data-key="${escapeAttr(encodeURIComponent(displayKey))}">
-                <div class="px-3 sm:px-6 py-3 sm:py-4 flex items-center">
-                    <div class="flex-shrink-0 mr-3 sm:mr-4 z-20 h-full flex items-center"><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" name="keys" value="${escapeAttr(fullKey)}" class="hidden" onchange="updateRowStyle(this)"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
-                    <div class="flex-shrink-0 mr-3 sm:mr-5"><div class="w-10 h-10 ${color} rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">${escapeHtml((senderName[0] || '?').toUpperCase())}</div></div>
-                    <div class="min-w-0 flex-1 flex flex-col justify-center">
-                        <div class="flex justify-between items-baseline mb-1">
-                            <p class="text-sm sm:text-base ${fontWeight} text-gray-900 truncate mr-2">${dotHtml}${escapeHtml(senderName)}</p>
-                            <time class="text-xs text-gray-400 whitespace-nowrap flex-shrink-0" data-ts="${ts}" datetime="${ts > 0 ? escapeAttr(new Date(ts).toISOString()) : ''}"></time>
-                        </div>
-                        <p class="text-sm ${textColor} truncate leading-snug"><span class="${fontWeight}">${escapeHtml(subject)}</span></p>
+            <div class="row${isRead ? '' : ' unread'}" data-key="${escapeAttr(encodeURIComponent(displayKey))}" data-ts="${ts}">
+                <div class="row-check">
+                    <label class="check">
+                        <input type="checkbox" name="keys" value="${escapeAttr(fullKey)}" aria-label="选择这封邮件">
+                        <span class="box">${CHECK_MARK}</span>
+                    </label>
+                </div>
+                <div class="avatar md ${color}" aria-hidden="true">${escapeHtml((senderName[0] || '?').toUpperCase())}</div>
+                <div class="row-body">
+                    <div class="row-top">
+                        <span class="row-from">${isRead || isTrashPage ? '' : '<span class="dot"></span>'}${escapeHtml(senderName)}</span>
+                        <time class="row-time" data-ts="${ts}" datetime="${ts > 0 ? escapeAttr(new Date(ts).toISOString()) : ''}"></time>
                     </div>
-                </div></div>`;
+                    <div class="row-subj">${escapeHtml(subject)}</div>
+                </div>
+                <div class="row-acts">${quickActions}</div>
+            </div>`;
         }).join('');
-        const emptyState = `<div class="flex flex-col items-center justify-center text-center p-8 mt-20"><div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-4">${query ? Icons.search : (isTrashPage ? Icons.trash : Icons.inbox)}</div><h3 class="text-gray-900 font-medium text-lg">${query ? '没有匹配的邮件' : (isTrashPage ? '回收站是空的' : '暂无邮件')}</h3><p class="text-sm text-gray-500">${query ? '换个关键词试试。搜索范围是主题与发件人' : (isTrashPage ? '被删除的邮件将在此处保留' : '您的收件箱空空如也')}</p></div>`;
-        
-        const batchButtons = isTrashPage ? `
-            <button onclick="confirmBatch('restore')" class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]">${Icons.refresh} <span class="ml-1 hidden sm:inline">恢复</span></button>
-            <button onclick="confirmBatch('purge')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash} <span class="ml-1 hidden sm:inline">删除</span></button>` : `
-            <button onclick="confirmBatch('mark_read')" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium mr-1 whitespace-nowrap transition active:scale-[0.98]" title="标记为已读">${Icons.read}</button>
-            <button onclick="confirmBatch('mark_unread')" class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]" title="标记为未读">${Icons.unread}</button>
-            <button onclick="confirmBatch('delete')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash}</button>`;
+
+        const emptyState = `
+        <div class="empty">
+            <div class="empty-ic">${query ? Icons.search : (isTrashPage ? Icons.trash : Icons.inbox)}</div>
+            <h3>${query ? '没有匹配的邮件' : (isTrashPage ? '回收站是空的' : '收件箱是空的')}</h3>
+            <p>${query ? '换个关键词试试。搜索范围是主题与发件人。' : (isTrashPage ? '被删除的邮件会在这里保留，直到你彻底删除它们。' : '发给这个地址的邮件会自动出现在这里。')}</p>
+            ${query ? '<a class="btn ghost" href="' + (isTrashPage ? '/trash' : '/') + '">清除搜索条件</a>' : ''}
+        </div>`;
+
+        const batchButtons = isTrashPage
+            ? '<button type="button" class="btn ok-soft" onclick="confirmBatch(\'restore\')">' + Icons.restore + '<span class="lbl-wide">恢复</span></button>'
+                + '<button type="button" class="btn danger-soft" onclick="confirmBatch(\'purge\')">' + Icons.trash + '<span class="lbl-wide">彻底删除</span></button>'
+            : '<button type="button" class="iconbtn" onclick="confirmBatch(\'mark_read\')" title="标记为已读" aria-label="标记为已读">' + Icons.mailOpen + '</button>'
+                + '<button type="button" class="iconbtn" onclick="confirmBatch(\'mark_unread\')" title="标记为未读" aria-label="标记为未读">' + Icons.mail + '</button>'
+                + '<button type="button" class="iconbtn danger" onclick="confirmBatch(\'delete\')" title="移入回收站" aria-label="移入回收站">' + Icons.trash + '</button>';
 
         const latestTimestamp = emails.length > 0 ? keyTimestamp(emails[0].key) : 0;
-
         const searchAction = isTrashPage ? '/trash' : '/';
-        const searchBar = `
-            <form method="GET" action="${searchAction}" class="px-3 sm:px-6 py-2.5 border-b border-gray-100 bg-white shrink-0 flex items-center gap-2">
-                <div class="relative flex-1 min-w-0">
-                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400 pointer-events-none">${Icons.search}</span>
-                    <input type="search" name="q" value="${escapeAttr(query)}" autocomplete="off" placeholder="搜索主题或发件人" class="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                </div>
-                <button type="submit" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors active:scale-[0.98]">搜索</button>
-                ${query ? `<a href="${searchAction}" class="px-3 py-2 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-100 transition-colors">清除</a>` : ''}
-            </form>`;
 
         const countLine = query
-            ? `找到 ${matched.length} 封匹配「${query}」的邮件`
-            : `共 ${emails.length} 封邮件`;
-        const shownLine = hasMore ? `，当前显示最新 ${shown.length} 封` : '';
+            ? '找到 ' + matched.length + ' 封匹配「' + query + '」的邮件'
+            : '共 ' + emails.length + ' 封邮件';
+        const shownLine = hasMore ? '，当前显示最新 ' + shown.length + ' 封' : '';
 
         // 「加载更多」用 URL 递进而不是一次渲染全部：
         // 邮件上千封时把 DOM 全铺出来会明显卡顿，而分页的成本几乎为零。
         const nextHref = searchAction + '?limit=' + nextSize + (query ? '&q=' + encodeURIComponent(query) : '');
         const footer = !hasMore ? '' : (nextSize > pageSize
-            ? `<div class="px-4 py-5 text-center"><a href="${escapeAttr(nextHref)}" class="inline-block px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">加载更多（还有 ${matched.length - shown.length} 封）</a></div>`
-            : `<div class="px-4 py-5 text-center text-xs text-gray-400">仅显示前 ${PAGE_SIZE_MAX} 封，请用搜索缩小范围</div>`);
+            ? '<div class="loadmore"><a class="btn ghost" href="' + escapeAttr(nextHref) + '">加载更多（还有 ' + (matched.length - shown.length) + ' 封）</a></div>'
+            : '<div class="loadmore"><span class="hint">仅显示前 ' + PAGE_SIZE_MAX + ' 封，请用搜索缩小范围</span></div>');
+
+        const searchBar = `
+        <form class="searchbar" method="GET" action="${searchAction}" role="search">
+            <div class="input-wrap">
+                <span class="lead">${Icons.search}</span>
+                <input class="input" id="search-input" type="search" name="q" value="${escapeAttr(query)}" autocomplete="off" aria-label="搜索主题或发件人" placeholder="搜索主题或发件人　按 / 聚焦">
+            </div>
+            <button type="submit" class="btn primary">搜索</button>
+            ${query ? '<a class="btn ghost" href="' + searchAction + '">清除</a>' : ''}
+        </form>`;
 
         const html = `
-        <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-            <div class="h-14 sm:h-16 px-3 sm:px-6 border-b border-gray-100 flex items-center justify-between bg-white shrink-0 z-20 sticky top-0 shadow-sm">
-                <div class="flex items-center w-full">
-                     <div class="mr-3 sm:mr-4 flex items-center"><button onclick="toggleMenu()" class="md:hidden mr-3 text-gray-500 p-1 -ml-2 rounded-full hover:bg-gray-100 active:scale-95">${Icons.menu}</button><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" onclick="toggleAll(this)" class="hidden"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
-                    <div id="default-header" class="flex items-center justify-between w-full"><h1 class="text-lg sm:text-xl font-bold text-gray-800">${isTrashPage ? '回收站' : '收件箱'}</h1><div class="flex items-center gap-1"><a href="/settings" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="设置">${Icons.gear}</a><button onclick="window.location.reload()" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="刷新">${Icons.refresh}</button></div></div>
-                    <div id="action-header" class="hidden flex items-center justify-between w-full"><span class="text-sm text-gray-600 font-medium whitespace-nowrap mr-2">已选 <span id="selected-count" class="text-indigo-600 font-bold">0</span></span><div class="flex items-center">${batchButtons}</div></div>
+        <div class="panel">
+            <div class="topbar">
+                <label class="check" title="全选本页">
+                    <input type="checkbox" id="check-all" onclick="toggleAll(this)" aria-label="全选本页邮件">
+                    <span class="box">${CHECK_MARK}</span>
+                </label>
+                <h1>${isTrashPage ? '回收站' : '收件箱'}</h1>
+                <div class="topbar-actions" id="default-header">
+                    <a class="iconbtn" href="/settings" title="设置" aria-label="设置">${Icons.gear}</a>
+                    <button type="button" class="iconbtn" onclick="location.reload()" title="刷新" aria-label="刷新">${Icons.refresh}</button>
+                </div>
+                <div class="topbar-actions" id="action-header" hidden>
+                    <span class="sel-count">已选 <b id="selected-count">0</b></span>
+                    ${batchButtons}
                 </div>
             </div>
             ${searchBar}
-            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom"><input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}"><div class="px-3 sm:px-6 py-2 text-xs text-gray-400 border-b border-gray-50 bg-white">${escapeHtml(countLine + shownLine)}</div>${shown.length > 0 ? listHtml : emptyState}${footer}</form>
-        </div>`;
-        return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp, { unreadCount: unreadCount }));
+            <div class="rowlist-meta">${escapeHtml(countLine + shownLine)}</div>
+            <form id="batch-form" method="POST" action="/batch-action" class="listwrap">
+                <input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}">
+                <div id="list-wrap">
+                    ${shown.length > 0 ? rows : ''}
+                </div>
+                ${shown.length > 0 ? footer : emptyState}
+            </form>
+        </div>
+        <form id="single-form" method="POST" action="/batch-action" hidden>
+            <input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}">
+            <input type="hidden" name="action" value="">
+            <input type="hidden" name="keys" value="">
+        </form>`;
+        return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp, {
+            unreadCount: unreadCount,
+            // 搜索时把关键词带进标题：开了好几个标签页找邮件时，「搜索「发票」· CF Mail」
+            // 比三个一模一样的「收件箱 · CF Mail」有用得多。
+            title: query ? '搜索「' + query + '」' : (isTrashPage ? '回收站' : '收件箱')
+        }));
     }
     return textResponse('Not Found', 404);
 }
@@ -2088,7 +3223,7 @@ export default {
         } catch (e) {
             // 不把异常细节回显给客户端（会泄漏内部结构），完整堆栈只进日志
             console.error('Request failed:', e && e.stack ? e.stack : e);
-            return htmlResponse('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>服务异常</title><script src="https://cdn.tailwindcss.com"></script></head><body class="h-screen flex items-center justify-center bg-gray-50"><div class="text-center p-8"><h1 class="text-2xl font-bold text-gray-900 mb-2">服务暂时不可用</h1><p class="text-gray-500 text-sm">请稍后重试。若持续出现，请查看 Worker 日志（Dashboard 的 Logs 页或 wrangler tail）。</p></div></body></html>', 500);
+            return htmlResponse('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + THEME_BOOT + '<title>服务异常 · CF Mail</title><link rel="stylesheet" href="/app.css?v=' + UI_VERSION + '"></head><body><main class="auth"><div class="auth-card"><div class="auth-body"><div class="auth-head"><div class="modal-ic danger">' + Icons.alert + '</div><h1>服务暂时不可用</h1><p class="auth-sub">请稍后重试。若持续出现，请查看 Worker 日志（Dashboard 的 Logs 页，或本地 <span class="mono">wrangler tail</span>）。</p></div></div></div></main></body></html>', 500);
         }
     },
 
