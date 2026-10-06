@@ -878,14 +878,39 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
             }
         }
 
-        // 邮件正文渲染在沙箱 iframe 里，由它 postMessage 回报真实高度，父页面据此调整高度。
+        // 邮件正文渲染在沙箱 iframe 里，由它 postMessage 回报正文容器高度，父页面据此调整高度。
         // 校验 e.source === frame.contentWindow，避免页面内其它来源伪造高度。
+        //
+        // ⚠️ 高度必须「原样采用」，绝不能加固定增量。iframe 高度会决定它内部视口的高度，
+        //    而 documentElement.scrollHeight 被视口高度托底 —— 一旦在这里加常数，
+        //    就会形成「视口变高 → 测得更高 → iframe 再变高」的正反馈，
+        //    表现为打开邮件后正文下方无限空白（实测 4 秒能涨 1700px 以上）。
+        //    dataset.frameHeight 做去重，避免同样的高度反复写 style。
+        //
+        // ⚠️ 还有一类内容用上面的办法治不好：正文里带 vh 单位（例如 <div style="min-height:100vh">）。
+        //    vh 天然绑定视口高度，而视口高度正是我们在设的值 —— 这类内容不存在不动点，
+        //    高度会以固定步长匀速爬升。真实内容不会「等幅」增长（图片陆续加载的步长是参差的），
+        //    所以连续 3 次等幅递增就判定为反馈环并停止跟随。窗口尺寸变化时重置判定。
+        let appliedHeight = -1;
+        let lastStep = 0;
+        let sameStep = 0;
+        window.addEventListener('resize', function () { lastStep = 0; sameStep = 0; });
         window.addEventListener('message', function (e) {
             const d = e.data;
             if (!d || typeof d.__cfmailHeight !== 'number') return;
             const frame = document.getElementById('mail-frame');
             if (!frame || e.source !== frame.contentWindow) return;
-            frame.style.height = Math.min(Math.max(d.__cfmailHeight + 8, 320), 20000) + 'px';
+            const h = Math.min(Math.max(Math.ceil(d.__cfmailHeight), 120), 20000);
+            if (h === appliedHeight) return;
+            const step = appliedHeight > 0 ? h - appliedHeight : 0;
+            if (step > 0 && step <= 64 && step === lastStep) {
+                if (++sameStep >= 3) return;
+            } else {
+                sameStep = 0;
+            }
+            lastStep = step;
+            appliedHeight = h;
+            frame.style.height = h + 'px';
         });
 
         // 邮件行点击改用事件委托：原来把键名拼进 onclick 的单引号字符串里，
@@ -1180,21 +1205,35 @@ function stripActiveContent(html) {
         .replace(/(href|src)\s*=\s*(["'])\s*javascript:/gi, '$1=$2blocked:');
 }
 
-const FRAME_CSS = 'html{color-scheme:light}'
-    + 'body{margin:0;padding:0 2px 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.7;color:#1f2937;word-break:break-word;overflow-wrap:anywhere}'
+// ⚠️ 高度上报的取值对象必须是「内容容器」而不是 documentElement，理由见 FRAME_HEIGHT_SCRIPT。
+//    配套约束：html / body 必须保持 height:auto，否则内容容器会被视口高度拉伸。
+const FRAME_CSS = 'html,body{height:auto !important;min-height:0 !important;max-height:none !important;margin:0 !important;padding:0 !important}'
+    + 'html{color-scheme:light}'
+    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.7;color:#1f2937;word-break:break-word;overflow-wrap:anywhere}'
+    + '#mail-root{padding:0 2px 20px}'
     + 'img{max-width:100%;height:auto}table{max-width:100%}'
     + 'blockquote{margin:0;padding-left:.8rem;border-left:3px solid #e5e7eb;color:#6b7280}'
     + 'a{color:#4f46e5}'
     + 'pre.plain{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit}';
 
-// 唯一的内联脚本：向父页面回报自身高度，父页面据此调整 iframe 高度。
+// 唯一的内联脚本：向父页面回报正文容器的真实高度，父页面据此调整 iframe 高度。
+//
+// ⚠️ 这里踩过一个很隐蔽的坑：原来测的是 document.documentElement.scrollHeight。
+//    而 documentElement 的 scrollHeight 会被视口高度「托底」—— 内容再短也返回不小于
+//    iframe 视口的高度。父页面当时又给测得值加了固定增量（+8px）再设为 iframe 高度，
+//    于是形成正反馈：视口变高 → scrollHeight 跟着变高 → iframe 更高 → …… 一路顶到上限。
+//    用户看到的就是「打开邮件后下方无限空白」。
+//    两道保险：① 只测 #mail-root（内容驱动，与视口无关）；② 父页面原样采用、不加常数。
+//    另外用 last 去重，避免同一高度反复 postMessage。
 const FRAME_HEIGHT_SCRIPT = '(function(){'
-    + 'function s(){var d=document.documentElement,b=document.body;'
-    + 'var h=Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0);'
+    + 'var root=document.getElementById("mail-root")||document.body,last=-1;'
+    + 'function s(){var r=root.getBoundingClientRect?root.getBoundingClientRect().height:0;'
+    + 'var h=Math.ceil(Math.max(root.scrollHeight||0,r));'
+    + 'if(h===last)return;last=h;'
     + 'try{parent.postMessage({__cfmailHeight:h},"*")}catch(e){}}'
     + 'window.addEventListener("load",s);window.addEventListener("resize",s);'
     + 'document.addEventListener("DOMContentLoaded",s);'
-    + 'if(window.ResizeObserver){try{new ResizeObserver(s).observe(document.documentElement)}catch(e){}}'
+    + 'if(window.ResizeObserver){try{new ResizeObserver(s).observe(root)}catch(e){}}'
     + 'setTimeout(s,300);setTimeout(s,1500)})();';
 
 function buildFrameDocument(email) {
@@ -1210,7 +1249,7 @@ function buildFrameDocument(email) {
         + '<meta name="viewport" content="width=device-width, initial-scale=1">'
         + '<meta name="referrer" content="no-referrer">'
         + '<style>' + FRAME_CSS + '</style></head><body>'
-        + inner
+        + '<div id="mail-root">' + inner + '</div>'
         + '<script>' + FRAME_HEIGHT_SCRIPT + '<\/script>'
         + '</body></html>';
 }
@@ -1293,7 +1332,7 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 ${attachmentsHtml}
                 <div id="translate-status" class="hidden"></div>
                 <div id="mail-original">
-                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:60vh;min-height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
+                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
                     <p class="mt-3 text-xs text-gray-400">正文在沙箱中隔离渲染，邮件自带脚本与内联事件已被剥离。</p>
                 </div>
                 <div id="mail-translated" class="hidden">

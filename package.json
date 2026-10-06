@@ -14,6 +14,7 @@
     "check": "wrangler deploy --dry-run --outdir=.wrangler/dry-run",
     "test": "node tests/regression.test.mjs",
     "preview": "node tools/render-preview.mjs",
+    "verify:frame": "node tools/verify-frame-height.mjs",
     "types": "wrangler types",
     "tail": "wrangler tail",
     "whoami": "wrangler whoami",
