@@ -33,6 +33,18 @@ const BASE_HEADERS = {
     'Cache-Control': 'no-store'
 };
 
+// ---------- 正文翻译（Workers AI） ----------
+// 模型：@cf/meta/m2m100-1.2b —— 多对多翻译模型，不产生幻觉内容，只做翻译。
+// 输入 { text, source_lang, target_lang }，输出 { translated_text }。
+// 注意 source_lang 默认是 english，所以非英文邮件必须显式给出源语言（见 detectSourceLang）。
+const TRANSLATE_MODEL = '@cf/meta/m2m100-1.2b';
+const TRANSLATE_TARGET = 'chinese';
+// 该模型只支持这 10 种语言（取自模型元数据），不在列表里的语种只能明确报错，不能硬翻。
+const TRANSLATE_LANGS = ['english', 'chinese', 'french', 'spanish', 'arabic', 'russian', 'german', 'japanese', 'portuguese', 'hindi'];
+// 分段翻译：单次请求塞太长会被模型截断，按段落切开分别翻再拼回去。
+const TRANSLATE_CHUNK_SIZE = 2500;
+const TRANSLATE_MAX_CHUNKS = 6;
+
 // ==========================================
 // 1. PWA & UI 资源
 // ==========================================
@@ -552,6 +564,130 @@ function splitV1Key(rest) {
     return { from: rest.slice(0, sep), subject: rest.slice(sep + 1) };
 }
 
+// ==========================================
+// 正文翻译辅助
+// ==========================================
+
+// 把邮件 HTML 正文压成纯文本供翻译用。
+// 只做「够用」的清理：去掉 script/style/注释、块级标签转换行、解码常见实体、压缩空白。
+// 不追求完美还原排版 —— 翻译只需要可读的句子。
+function htmlToText(html) {
+    if (!html) return '';
+    let s = String(html);
+    s = s.replace(/<(script|style|head|title)[\s\S]*?<\/\1>/gi, ' ');
+    s = s.replace(/<!--[\s\S]*?-->/g, ' ');
+    s = s.replace(/<br\s*\/?>/gi, '\n');
+    s = s.replace(/<li[^>]*>/gi, '\n· ');
+    s = s.replace(/<\/(p|div|li|tr|h[1-6]|blockquote|section|article|table)>/gi, '\n');
+    s = s.replace(/<[^>]*>/g, '');
+    s = s.replace(/&nbsp;/gi, ' ')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/gi, '&');
+    s = s.replace(/&#(\d{1,7});/g, (m, d) => {
+        try { return String.fromCodePoint(parseInt(d, 10)); } catch (e) { return m; }
+    });
+    s = s.replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => {
+        try { return String.fromCodePoint(parseInt(h, 16)); } catch (e) { return m; }
+    });
+    s = s.replace(/[ \t\u00a0]+/g, ' ');
+    s = s.replace(/\n{3,}/g, '\n\n');
+    return s.trim();
+}
+
+// 判断正文是什么语言。
+//
+// m2m100 的 source_lang 默认是 english，不显式给源语言的话，非英文邮件会被当成英文硬翻，
+// 结果就是胡言乱语。所以这里做一次轻量识别：
+//   - 先按字符集判断（汉字/假名/谚文/西里尔/阿拉伯/天城文）
+//   - 拉丁字母再用少量高频虚词区分法/西/德/葡，判不出就当英文（也是模型默认值）
+// 判错的代价只是译文质量下降，不会报错；识别不出来时也退化成 english。
+function detectSourceLang(text) {
+    const sample = String(text || '').slice(0, 4000);
+    const count = re => (sample.match(re) || []).length;
+
+    const han = count(/[\u4e00-\u9fff\u3400-\u4dbf]/g);
+    const kana = count(/[\u3040-\u30ff]/g);
+    const hangul = count(/[\uac00-\ud7af\u1100-\u11ff]/g);
+    const cyrillic = count(/[\u0400-\u04ff]/g);
+    const arabic = count(/[\u0600-\u06ff]/g);
+    const devanagari = count(/[\u0900-\u097f]/g);
+    const latin = count(/[A-Za-z]/g);
+
+    const total = han + kana + hangul + cyrillic + arabic + devanagari + latin;
+    if (total === 0) return 'english';
+
+    // 谚文：m2m100 不支持韩文，直接报出来，免得硬翻成乱码
+    if (hangul > total * 0.3) return 'korean';
+    // 日文里也有大量汉字，所以先看假名占比再判中文
+    if (kana > 0 && kana * 4 >= han) return 'japanese';
+    if (han > total * 0.3) return 'chinese';
+    if (cyrillic > total * 0.3) return 'russian';
+    if (arabic > total * 0.3) return 'arabic';
+    if (devanagari > total * 0.3) return 'hindi';
+
+    const lower = ' ' + sample.toLowerCase().replace(/[^a-z\s]/g, ' ') + ' ';
+    const has = w => lower.indexOf(' ' + w + ' ') !== -1;
+    const scores = {
+        french: ['le', 'la', 'les', 'des', 'une', 'est', 'pour', 'vous', 'que'].filter(has).length,
+        spanish: ['el', 'los', 'las', 'una', 'para', 'con', 'que', 'por', 'esta'].filter(has).length,
+        german: ['der', 'die', 'das', 'und', 'ist', 'nicht', 'mit', 'sich', 'auch'].filter(has).length,
+        portuguese: ['uma', 'para', 'com', 'que', 'nao', 'por', 'mais', 'voce'].filter(has).length
+    };
+    // 阈值设为 2：只命中 1 个虚词太容易误判，不如老实用英文
+    let best = 'english', bestScore = 1;
+    for (const lang of Object.keys(scores)) {
+        if (scores[lang] > bestScore) { best = lang; bestScore = scores[lang]; }
+    }
+    return best;
+}
+
+// 按段落 / 句子边界把长正文切成若干段，避免把词从中间切断。
+// 超出 maxChunks 的部分会被丢弃，并通过 truncated 告诉前端。
+function splitForTranslation(text, size, maxChunks) {
+    const s = String(text || '');
+    if (s.length <= size) return { chunks: s ? [s] : [], truncated: false };
+
+    const chunks = [];
+    let rest = s;
+    while (rest.length > 0 && chunks.length < maxChunks) {
+        if (rest.length <= size) { chunks.push(rest); rest = ''; break; }
+        let cut = rest.lastIndexOf('\n\n', size);
+        if (cut < size * 0.5) cut = rest.lastIndexOf('\n', size);
+        if (cut < size * 0.5) cut = rest.lastIndexOf('. ', size);
+        if (cut < size * 0.5) cut = size - 1;
+        chunks.push(rest.slice(0, cut + 1));
+        rest = rest.slice(cut + 1);
+    }
+    return { chunks, truncated: rest.trim().length > 0 };
+}
+
+// 模型输出结构可能随版本调整，这里做一次宽松提取，
+// 免得某天字段改名整个功能直接失效（找不到就返回空串，由上层报错）。
+function pickTranslatedText(result) {
+    if (result === null || result === undefined) return '';
+    if (typeof result === 'string') return result;
+    if (typeof result !== 'object') return '';
+    const keys = ['translated_text', 'translation', 'text', 'output', 'response', 'result'];
+    for (const k of keys) {
+        if (typeof result[k] === 'string' && result[k].trim()) return result[k];
+    }
+    return '';
+}
+
+// 把值安全地内联进 <script>：转义 "<" 等字符，
+// 防止邮件主题/发件人里出现 </script> 提前闭合脚本块造成 XSS。
+function jsonForScript(value) {
+    return JSON.stringify(value === undefined ? null : value)
+        .replace(/</g, '\\u003c')
+        .replace(/>/g, '\\u003e')
+        .replace(/&/g, '\\u0026')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+}
+
 // decodeURIComponent 遇到畸形百分号编码会抛 URIError，包一层避免整个请求 500。
 function safeDecode(value) {
     try { return decodeURIComponent(String(value || '')); } catch (e) { return ''; }
@@ -597,7 +733,8 @@ const Icons = {
     alert: `<svg class="w-10 h-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>`,
     read: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" /></svg>`,
     unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`,
-    gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`
+    gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`,
+    translate: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`
 };
 
 const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
@@ -1115,8 +1252,13 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
         </div>`;
     }
 
+    // 翻译按钮。译文由服务端调 Workers AI 生成，原文已是中文 / 语种不受支持时会在状态条上明确说明。
+    const translateBtn = `
+            <button id="translate-btn" onclick="translateMail()" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="把正文翻译成中文">${Icons.translate} <span class="ml-1">翻译</span></button>`;
+
     const toolbar = isTrash ? `
         <div class="flex items-center space-x-1 sm:space-x-2">
+            ${translateBtn}
             <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
                 <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
             </form>
@@ -1124,7 +1266,10 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.trash} <span class="ml-1">删除</span></button>
             </form>
         </div>` : `
-        <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${escapeAttr(key)}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>`;
+        <div class="flex items-center space-x-1 sm:space-x-2">
+            ${translateBtn}
+            <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${escapeAttr(key)}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>
+        </div>`;
 
     return `
     <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
@@ -1146,11 +1291,96 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                     <div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${escapeHtml(dateStr)}</div>
                 </div>
                 ${attachmentsHtml}
-                <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:60vh;min-height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
-                <p class="mt-3 text-xs text-gray-400">正文在沙箱中隔离渲染，邮件自带脚本与内联事件已被剥离。</p>
+                <div id="translate-status" class="hidden"></div>
+                <div id="mail-original">
+                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:60vh;min-height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
+                    <p class="mt-3 text-xs text-gray-400">正文在沙箱中隔离渲染，邮件自带脚本与内联事件已被剥离。</p>
+                </div>
+                <div id="mail-translated" class="hidden">
+                    <div id="translate-body" class="text-[15px] leading-relaxed text-gray-800 whitespace-pre-wrap break-words select-text bg-indigo-50/40 border border-indigo-100 rounded-xl p-4 sm:p-5"></div>
+                    <p class="mt-3 text-xs text-gray-400">译文由 Workers AI 生成，仅供快速浏览；排版、链接与图片请以原文为准。</p>
+                </div>
             </div>
         </div>
-    </div>`;
+    </div>
+    <script>
+    (function () {
+        var KEY = ${jsonForScript(key)};
+        var translated = null;
+        var view = 'original';
+        function el(id) { return document.getElementById(id); }
+
+        function setStatus(text, kind) {
+            var box = el('translate-status');
+            if (!box) return;
+            if (!text) { box.className = 'hidden'; box.textContent = ''; return; }
+            box.className = 'mb-4 px-4 py-3 rounded-xl text-sm border ' + (kind === 'error'
+                ? 'bg-red-50 border-red-100 text-red-600'
+                : 'bg-indigo-50 border-indigo-100 text-indigo-700');
+            box.textContent = text;
+        }
+
+        function setView(next) {
+            var original = el('mail-original');
+            var panel = el('mail-translated');
+            var btn = el('translate-btn');
+            if (!original || !panel) return;
+            view = next;
+            var label = btn ? btn.querySelector('span') : null;
+            if (next === 'translated' && translated) {
+                original.classList.add('hidden');
+                panel.classList.remove('hidden');
+                if (label) label.textContent = '显示原文';
+            } else {
+                panel.classList.add('hidden');
+                original.classList.remove('hidden');
+                if (label) label.textContent = translated ? '显示译文' : '翻译';
+            }
+        }
+
+        window.translateMail = function () {
+            var btn = el('translate-btn');
+            if (translated) { setView(view === 'translated' ? 'original' : 'translated'); return; }
+            if (!btn || btn.disabled) return;
+
+            var label = btn.querySelector('span');
+            btn.disabled = true;
+            btn.classList.add('opacity-60', 'cursor-not-allowed');
+            if (label) label.textContent = '翻译中…';
+            setStatus('正在翻译，长邮件可能需要十几秒…', 'info');
+
+            fetch('/api/translate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: KEY })
+            }).then(function (res) {
+                return res.json().catch(function () { return null; }).then(function (data) {
+                    return { status: res.status, data: data };
+                });
+            }).then(function (r) {
+                var data = r.data || {};
+                if (!data.ok) {
+                    setStatus(data.error || ('翻译失败（HTTP ' + r.status + '），请稍后重试'), 'error');
+                    if (label) label.textContent = '翻译';
+                    return;
+                }
+                translated = data.translated;
+                var body = el('translate-body');
+                if (body) body.textContent = translated;
+                var note = '源语言：' + data.sourceLang;
+                if (data.truncated) note += '　·　邮件较长，仅翻译了前 ' + data.chunks + ' 段';
+                setStatus(note, 'info');
+                setView('translated');
+            }).catch(function () {
+                setStatus('网络错误，请稍后重试', 'error');
+                if (label) label.textContent = '翻译';
+            }).then(function () {
+                btn.disabled = false;
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+            });
+        };
+    })();
+    </script>`;
 }
 
 async function handleRequest(request, env, ctx) {
@@ -1262,6 +1492,71 @@ async function handleRequest(request, env, ctx) {
             if (ts > latest) latest = ts;
         }
         return jsonResponse({ latest: latest });
+    }
+
+    // ---------- 正文翻译 ----------
+    // 走 Workers AI（m2m100）。注意：邮件正文会被送进模型推理，
+    // 但对个人自建的邮箱来说，推理跑在同一个 Cloudflare 账号的基础设施内。
+    if (url.pathname === '/api/translate' && method === 'POST') {
+        if (!env.AI) {
+            return jsonResponse({
+                ok: false,
+                error: '未绑定 Workers AI。请确认 wrangler.jsonc 里有 "ai": { "binding": "AI" } 并重新部署。'
+            }, 503);
+        }
+
+        let reqKey = '';
+        try {
+            const payload = await request.json();
+            reqKey = String((payload && payload.key) || '');
+        } catch (e) {
+            return jsonResponse({ ok: false, error: '请求格式不正确' }, 400);
+        }
+        if (!reqKey) return jsonResponse({ ok: false, error: '缺少邮件标识' }, 400);
+
+        const target = await resolveEmailKey(env, reqKey);
+        if (!target) return jsonResponse({ ok: false, error: '邮件不存在或已被删除' }, 404);
+
+        const email = processEmail(bufferToBinaryString(await target.obj.arrayBuffer()));
+
+        // 优先用 text/plain 部分；只有 HTML 的邮件再退回「HTML 转纯文本」
+        let text = String(email.text || '').trim();
+        if (!text && email.html) text = htmlToText(email.html);
+        if (!text) return jsonResponse({ ok: false, error: '这封邮件没有可翻译的正文' }, 422);
+
+        const source = detectSourceLang(text);
+        if (TRANSLATE_LANGS.indexOf(source) === -1) {
+            return jsonResponse({ ok: false, error: '翻译模型暂不支持该语言，仅支持英/中/法/西/阿拉伯/俄/德/日/葡/印地语' }, 422);
+        }
+        if (source === TRANSLATE_TARGET) {
+            return jsonResponse({ ok: false, error: '这封邮件本来就是中文，无需翻译' }, 422);
+        }
+
+        const split = splitForTranslation(text, TRANSLATE_CHUNK_SIZE, TRANSLATE_MAX_CHUNKS);
+        if (split.chunks.length === 0) {
+            return jsonResponse({ ok: false, error: '这封邮件没有可翻译的正文' }, 422);
+        }
+
+        try {
+            // 分段并行翻译：串行翻长邮件会让浏览器等到超时
+            const parts = await Promise.all(split.chunks.map(chunk =>
+                env.AI.run(TRANSLATE_MODEL, { text: chunk, source_lang: source, target_lang: TRANSLATE_TARGET })
+            ));
+            const translated = parts.map(pickTranslatedText).join('\n\n').trim();
+            if (!translated) {
+                return jsonResponse({ ok: false, error: '翻译服务没有返回内容，请稍后重试' }, 502);
+            }
+            return jsonResponse({
+                ok: true,
+                translated: translated,
+                sourceLang: source,
+                chunks: split.chunks.length,
+                truncated: split.truncated
+            });
+        } catch (e) {
+            console.error('Translate failed:', e && e.stack ? e.stack : e);
+            return jsonResponse({ ok: false, error: '翻译失败，请稍后重试' }, 502);
+        }
     }
 
     // ---------- 应用内设置页 ----------
