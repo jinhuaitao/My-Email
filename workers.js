@@ -11,6 +11,25 @@ const CONFIG_FILE = 'sys_config.json';
 const SESSION_NAME = 'auth_session';
 const TRASH_PREFIX = 'trash/';
 
+// 内部系统键前缀。登录限流计数等放在这里，永远不会出现在邮件列表里。
+const SYS_PREFIX = '_sys/';
+
+// 会话有效期（服务端校验，Cookie 的 Max-Age 只是客户端约束）
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// 登录限流：同一 IP 在窗口期内失败达到阈值即锁定一段时间
+const MAX_LOGIN_FAILS = 8;
+const LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_LOCK_MS = 10 * 60 * 1000;
+
+// 统一安全响应头。注意：邮件正文 iframe 走单独的响应头，不带 X-Frame-Options。
+const BASE_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+    'Cache-Control': 'no-store'
+};
+
 // ==========================================
 // 1. PWA & UI 资源
 // ==========================================
@@ -46,10 +65,93 @@ self.addEventListener('fetch', (e) => { e.respondWith(fetch(e.request)); });
 // 2. 核心底层解析引擎
 // ==========================================
 
-async function hashPassword(password) {
-    const msgBuffer = new TextEncoder().encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+// ---------- 通用工具：HTML 转义 / 随机数 / 常量时间比较 ----------
+
+// 所有来自邮件（发件人、主题、附件名）或用户输入的字符串，拼进 HTML 前必须转义。
+// 邮件主题和发件人显示名完全由攻击者控制，不转义就是一个 XSS。
+function escapeHtml(value) {
+    return String(value === null || value === undefined ? '' : value)
+        .replace(/[&<>"']/g, function (c) {
+            if (c === '&') return '&amp;';
+            if (c === '<') return '&lt;';
+            if (c === '>') return '&gt;';
+            if (c === '"') return '&quot;';
+            return '&#39;';
+        });
+}
+
+// 属性值场景与文本场景用同一套转义即可（已覆盖引号）
+function escapeAttr(value) {
+    return escapeHtml(value);
+}
+
+function randomHex(byteLength) {
+    const bytes = new Uint8Array(byteLength);
+    crypto.getRandomValues(bytes);
+    let out = '';
+    for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
+    return out;
+}
+
+// 口令比对不能用 ===（会因提前返回而泄漏前缀信息），逐字符异或累加。
+function safeEqual(a, b) {
+    const x = String(a === null || a === undefined ? '' : a);
+    const y = String(b === null || b === undefined ? '' : b);
+    if (x.length !== y.length) return false;
+    let diff = 0;
+    for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+    return diff === 0;
+}
+
+async function sha256Hex(text) {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 加盐哈希：salt 为空时退化为 sha256(password)，用于兼容早期无盐版本的数据。
+async function hashPassword(password, salt) {
+    return sha256Hex(salt ? salt + ':' + password : String(password));
+}
+
+async function verifyPassword(config, password) {
+    if (config.salt) return safeEqual(await hashPassword(password, config.salt), config.password);
+    return safeEqual(await hashPassword(password), config.password);
+}
+
+// ---------- 统一响应构造 ----------
+
+function htmlResponse(body, status = 200, extra = {}) {
+    return new Response(body, {
+        status,
+        headers: Object.assign({}, BASE_HEADERS, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'X-Frame-Options': 'DENY'
+        }, extra)
+    });
+}
+
+function jsonResponse(data, status = 200, extra = {}) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: Object.assign({}, BASE_HEADERS, { 'Content-Type': 'application/json; charset=utf-8' }, extra)
+    });
+}
+
+function textResponse(body, status = 200, contentType = 'text/plain; charset=utf-8') {
+    return new Response(body, {
+        status,
+        headers: Object.assign({}, BASE_HEADERS, { 'Content-Type': contentType })
+    });
+}
+
+function assetResponse(body, contentType) {
+    return new Response(body, {
+        headers: {
+            'Content-Type': contentType,
+            'Cache-Control': 'public, max-age=86400',
+            'X-Content-Type-Options': 'nosniff'
+        }
+    });
 }
 
 function parseCookies(request) {
@@ -85,47 +187,62 @@ function bufferToBinaryString(buffer) {
     return binary;
 }
 
+// 把「二进制字符串 / base64 / quoted-printable」统一还原成字节数组。
+// 拆出来是为了让附件下载能直接拿到原始字节，而不必先解成字符串再编码回去。
+function decodeToBytes(str, encoding) {
+    if (!str) return new Uint8Array(0);
+    const enc = String(encoding || '').toLowerCase();
+
+    if (enc === 'base64') {
+        const cleanStr = String(str).replace(/[\r\n\s]/g, '');
+        try {
+            const binaryString = atob(cleanStr);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+            return bytes;
+        } catch (e) {
+            return new Uint8Array(0);
+        }
+    }
+
+    if (enc === 'quoted-printable' || enc === 'quoted') {
+        const cleanStr = String(str).replace(/=\r?\n/g, '');
+        const buffer = [];
+        for (let i = 0; i < cleanStr.length; i++) {
+            const c = cleanStr[i];
+            if (c === '=') {
+                const hex = cleanStr.substr(i + 1, 2);
+                if (/^[\da-fA-F]{2}$/.test(hex)) {
+                    buffer.push(parseInt(hex, 16));
+                    i += 2;
+                } else {
+                    buffer.push(61);
+                }
+            } else {
+                buffer.push(c.charCodeAt(0) & 0xff);
+            }
+        }
+        return new Uint8Array(buffer);
+    }
+
+    const bytes = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i) & 0xff;
+    return bytes;
+}
+
 function decodeContent(str, encoding, charset = 'utf-8') {
     if (!str) return '';
     let label = (charset || 'utf-8').toLowerCase().trim();
     if (label === 'gb2312' || label === 'gb_2312-80') label = 'gbk';
-    
+
     let decoder;
-    try { decoder = new TextDecoder(label); } 
+    try { decoder = new TextDecoder(label); }
     catch (e) { decoder = new TextDecoder('utf-8'); }
 
     try {
-        let bytes;
-        if (encoding === 'base64') {
-            const cleanStr = str.replace(/[\r\n\s]/g, '');
-            const binaryString = atob(cleanStr);
-            bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-        } else if (encoding === 'quoted-printable' || encoding === 'quoted') {
-            const cleanStr = str.replace(/=\r?\n/g, '');
-            const buffer = [];
-            for (let i = 0; i < cleanStr.length; i++) {
-                const c = cleanStr[i];
-                if (c === '=') {
-                    const hex = cleanStr.substr(i + 1, 2);
-                    if (/^[\da-fA-F]{2}$/.test(hex)) {
-                        buffer.push(parseInt(hex, 16));
-                        i += 2;
-                    } else { buffer.push(61); }
-                } else { buffer.push(c.charCodeAt(0)); }
-            }
-            bytes = new Uint8Array(buffer);
-        } else {
-            bytes = new Uint8Array(str.length);
-            for (let i = 0; i < str.length; i++) {
-                bytes[i] = str.charCodeAt(i);
-            }
-        }
-        
+        const bytes = decodeToBytes(str, encoding);
         let decoded = decoder.decode(bytes);
-        
+
         // 【核心修复】智能编码嗅探：如果 UTF-8 解出了菱形乱码(FFFD)，强行用 GBK 重新解一遍
         if (label === 'utf-8' && decoded.includes('\uFFFD')) {
             try {
@@ -256,61 +373,97 @@ function processEmail(rawText) {
         const rawType = part.headers['content-type'] || 'text/plain';
         const type = rawType.toLowerCase();
         const disposition = (part.headers['content-disposition'] || '').toLowerCase();
-        const encoding = (part.headers['content-transfer-encoding'] || '').toLowerCase();
+        const encoding = (part.headers['content-transfer-encoding'] || '').toLowerCase().trim();
         const charsetMatch = rawType.match(/charset\s*=\s*["']?([\w-]+)/i);
         const charset = charsetMatch ? charsetMatch[1] : 'utf-8';
-        
-        const filenameMatch = disposition.match(/filename\*?=(?:utf-8'')?(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i) || rawType.match(/name\s*=\s*(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i);
-        let isAttachment = disposition.includes('attachment') || (filenameMatch && !disposition.includes('inline'));
 
-        let decodedText = decodeContent(part.body, encoding, charset);
-        
+        const filenameMatch = disposition.match(/filename\*?=(?:utf-8'')?(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i) || rawType.match(/name\s*=\s*(?:"([^"]+)"|'([^']+)'|([^"';\r\n]+))/i);
+        const isAttachment = disposition.includes('attachment') || (!!filenameMatch && !disposition.includes('inline'));
+
         if (isAttachment || filenameMatch) {
             let filename = 'unknown_file';
             if (filenameMatch) { filename = filenameMatch[1] || filenameMatch[2] || filenameMatch[3] || 'unknown_file'; }
-            filename = decodeHeaderValue(filename);
-            
-            const cleanBase64 = part.body.replace(/\s/g, '');
-            let dataUri = '';
-            if (encoding === 'base64') {
-                const mime = type.split(';')[0].trim() || 'application/octet-stream';
-                dataUri = `data:${mime};base64,${cleanBase64}`;
-            }
-            const sizeInBytes = Math.round(cleanBase64.length * 0.75);
-            let sizeStr = sizeInBytes + ' B';
-            if(sizeInBytes > 1024) sizeStr = Math.round(sizeInBytes/1024) + ' KB';
-            if(sizeInBytes > 1024*1024) sizeStr = (sizeInBytes/(1024*1024)).toFixed(1) + ' MB';
+            filename = decodeHeaderValue(filename).trim() || 'unknown_file';
 
-            attachments.push({ filename: filename, size: sizeStr, data: dataUri, type: rawType });
+            const mime = type.split(';')[0].trim() || 'application/octet-stream';
+            const sizeInBytes = encoding === 'base64'
+                ? Math.round(part.body.replace(/\s/g, '').length * 0.75)
+                : part.body.length;
+            let sizeStr = sizeInBytes + ' B';
+            if (sizeInBytes >= 1024) sizeStr = Math.round(sizeInBytes / 1024) + ' KB';
+            if (sizeInBytes >= 1024 * 1024) sizeStr = (sizeInBytes / (1024 * 1024)).toFixed(1) + ' MB';
+
+            // 附件不再内联成 data: URI —— 一个 10MB 的附件会让页面膨胀到 13MB 并卡死浏览器。
+            // 这里只记录原始分片，由 /attachment/ 路由按需解码后流式返回。
+            attachments.push({
+                filename: filename,
+                sizeStr: sizeStr,
+                sizeBytes: sizeInBytes,
+                mime: mime,
+                encoding: encoding,
+                body: part.body,
+                type: rawType
+            });
 
             // 绝望模式容错：即使标记为附件，如果没有找到正文且内容像网页或文本，强行显示
-            if (!htmlBody && !textBody && part.body.length < 500000 && decodedText.trim().length > 0 && !/\x00/.test(decodedText)) {
-                if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(decodedText)) { htmlBody = decodedText; } 
-                else { textBody = decodedText; }
+            if (!htmlBody && !textBody && part.body.length < 500000) {
+                const probe = decodeContent(part.body, encoding, charset);
+                if (probe.trim().length > 0 && !/\x00/.test(probe)) {
+                    if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(probe)) { htmlBody = probe; }
+                    else { textBody = probe; }
+                }
             }
         } else {
-            if (type.includes('text/html')) { 
-                htmlBody = decodedText; 
-            } else if (type.includes('text/plain') && !htmlBody) { 
-                textBody = decodedText; 
+            const decodedText = decodeContent(part.body, encoding, charset);
+            if (type.includes('text/html')) {
+                if (!htmlBody) htmlBody = decodedText;
+            } else if (type.includes('text/plain')) {
+                if (!textBody) textBody = decodedText;
             } else if (!htmlBody && !textBody) {
-                if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(decodedText)) { htmlBody = decodedText; } 
+                if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(decodedText)) { htmlBody = decodedText; }
                 else { textBody = decodedText; }
             }
         }
     }
-    
+
     // 如果系统崩溃未找到任何正文，强行猜测解码
     if (!htmlBody && !textBody && topBodyRaw.trim().length > 0) {
-        let guessEncoding = /^[A-Za-z0-9+/=\s]{50,}$/.test(topBodyRaw.trim()) ? 'base64' : '';
-        let rawDecoded = decodeContent(topBodyRaw, guessEncoding, 'utf-8');
-        if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(rawDecoded)) { htmlBody = rawDecoded; } 
+        const guessEncoding = /^[A-Za-z0-9+/=\s]{50,}$/.test(topBodyRaw.trim()) ? 'base64' : '';
+        const rawDecoded = decodeContent(topBodyRaw, guessEncoding, 'utf-8');
+        if (/(<\s*html|<\s*body|<\s*div|<\s*p\s*>)/i.test(rawDecoded)) { htmlBody = rawDecoded; }
         else { textBody = rawDecoded; }
     }
 
-    let finalBody = htmlBody || `<pre class="whitespace-pre-wrap font-sans text-gray-700">${textBody}</pre>`;
-    if (!htmlBody && !textBody) finalBody = "<i>（无正文内容，请查看附件）</i>";
-    return { headers, body: finalBody, attachments, date: headers['date'] };
+    return { headers: headers, html: htmlBody, text: textBody, attachments: attachments, date: headers['date'] };
+}
+
+// 从 R2 键名里取出时间戳。键名格式异常时返回 0，避免 NaN 污染排序与「最新邮件」判断。
+function keyTimestamp(key) {
+    const parts = String(key).replace(TRASH_PREFIX, '').split('_');
+    const ts = parseInt(parts[0], 10);
+    return Number.isFinite(ts) ? ts : 0;
+}
+
+// 收件箱里「是邮件」的键：排除配置文件、内部系统键、回收站键
+function isMailKey(key) {
+    return key !== CONFIG_FILE && !key.startsWith(SYS_PREFIX) && !key.startsWith(TRASH_PREFIX);
+}
+
+// decodeURIComponent 遇到畸形百分号编码会抛 URIError，包一层避免整个请求 500。
+function safeDecode(value) {
+    try { return decodeURIComponent(String(value || '')); } catch (e) { return ''; }
+}
+
+// 把路径里的键解析成真实的 R2 对象，自动区分收件箱 / 回收站。
+async function resolveEmailKey(env, rawKey) {
+    if (!rawKey || rawKey === CONFIG_FILE || rawKey.startsWith(SYS_PREFIX)) return null;
+    const obj = await env.MAIL_BUCKET.get(rawKey);
+    if (obj) return { key: rawKey, obj: obj, isTrash: rawKey.startsWith(TRASH_PREFIX) };
+    if (rawKey.startsWith(TRASH_PREFIX)) return null;
+    const trashedKey = TRASH_PREFIX + rawKey;
+    const trashed = await env.MAIL_BUCKET.get(trashedKey);
+    if (trashed) return { key: trashedKey, obj: trashed, isTrash: true };
+    return null;
 }
 
 function getAvatarColor(name) {
@@ -332,6 +485,7 @@ const Icons = {
     logout: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>`,
     back: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>`,
     attach: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>`,
+    file: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`,
     download: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>`,
     menu: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>`,
     user: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>`,
@@ -482,6 +636,26 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
                 document.body.style.overflow = '';
             }
         }
+
+        // 邮件正文渲染在沙箱 iframe 里，由它 postMessage 回报真实高度，父页面据此调整高度。
+        // 校验 e.source === frame.contentWindow，避免页面内其它来源伪造高度。
+        window.addEventListener('message', function (e) {
+            const d = e.data;
+            if (!d || typeof d.__cfmailHeight !== 'number') return;
+            const frame = document.getElementById('mail-frame');
+            if (!frame || e.source !== frame.contentWindow) return;
+            frame.style.height = Math.min(Math.max(d.__cfmailHeight + 8, 320), 20000) + 'px';
+        });
+
+        // 邮件行点击改用事件委托：原来把键名拼进 onclick 的单引号字符串里，
+        // 而 encodeURIComponent 并不转义单引号，主题里带单引号就能闭合字符串注入脚本。
+        document.addEventListener('click', function (e) {
+            const t = e.target;
+            if (!t || typeof t.closest !== 'function') return;
+            if (t.closest('a, button, input, label, form, iframe')) return;
+            const row = t.closest('.email-row');
+            if (row && row.dataset.key) window.location.href = '/email/' + row.dataset.key;
+        });
     </script>
 </head>
 <body class="bg-gray-50 fixed inset-0 flex overflow-hidden text-gray-800 w-full">
@@ -516,22 +690,202 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
     <main class="flex-1 flex flex-col min-w-0 min-h-0 bg-white md:bg-gray-50 w-full relative z-0">${content}</main>
 </body></html>`;
 
-const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${error}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${siteKey}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
+const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="current-password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
 
-const renderSetup = () => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>系统初始化</title><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-600 to-blue-700"><div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"><div class="p-8"><h1 class="text-3xl font-bold text-gray-900 mb-2">欢迎使用</h1><p class="text-gray-500 mb-8">请设置您的管理员账号以完成部署。</p><form method="POST" action="/setup" class="space-y-6"><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置用户名</label><input type="text" name="username" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="admin" required></div><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置密码</label><input type="password" name="password" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="••••••••" required></div><button class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg hover:shadow-xl active:scale-[0.98]">完成设置并登录</button></form></div></div></body></html>`;
+const renderSetup = (error = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>系统初始化</title><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-600 to-blue-700"><div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"><div class="p-8"><h1 class="text-3xl font-bold text-gray-900 mb-2">欢迎使用</h1><p class="text-gray-500 mb-8">请设置管理员账号以完成首次部署。</p>${error ? `<div class="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl">⚠️ ${escapeHtml(error)}</div>` : ''}<form method="POST" action="/setup" class="space-y-6"><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置用户名</label><input type="text" name="username" autocomplete="username" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="admin" required></div><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置密码</label><input type="password" name="password" autocomplete="new-password" minlength="8" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="至少 8 位" required></div><button class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg hover:shadow-xl active:scale-[0.98]">完成设置并登录</button></form></div></div></body></html>`;
 
 // ==========================================
 // 4. 业务逻辑与路由
 // ==========================================
+
+// ---------- 登录限流（计数存在 _sys/ 前缀下，永远不会出现在邮件列表里） ----------
+
+function clientIp(request) {
+    return request.headers.get('CF-Connecting-IP')
+        || (request.headers.get('X-Forwarded-For') || '').split(',')[0].trim()
+        || 'unknown';
+}
+
+function loginFailKey(ip) {
+    return SYS_PREFIX + 'login_fail_' + String(ip).replace(/[^a-zA-Z0-9.:_-]/g, '_');
+}
+
+async function getLoginLock(env, ip) {
+    try {
+        const obj = await env.MAIL_BUCKET.get(loginFailKey(ip));
+        if (!obj) return null;
+        const rec = await obj.json();
+        if (rec && rec.until && Date.now() < rec.until) return rec;
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function noteLoginFailure(env, ip) {
+    try {
+        const key = loginFailKey(ip);
+        const now = Date.now();
+        let rec = { count: 0, first: now, until: 0 };
+        const obj = await env.MAIL_BUCKET.get(key);
+        if (obj) { try { rec = await obj.json(); } catch (e) {} }
+        if (!rec.first || now - rec.first > LOGIN_FAIL_WINDOW_MS) rec = { count: 0, first: now, until: 0 };
+        rec.count = (rec.count || 0) + 1;
+        if (rec.count >= MAX_LOGIN_FAILS) {
+            rec.until = now + LOGIN_LOCK_MS;
+            rec.count = 0;
+            rec.first = now;
+        }
+        await env.MAIL_BUCKET.put(key, JSON.stringify(rec));
+    } catch (e) {}
+}
+
+async function clearLoginFailures(env, ip) {
+    try { await env.MAIL_BUCKET.delete(loginFailKey(ip)); } catch (e) {}
+}
+
+// ---------- 邮件正文沙箱文档 ----------
+
+// 危险类型一律降级为 octet-stream：否则 text/html、image/svg+xml 之类的附件
+// 会被浏览器当作页面渲染（存储型 XSS）。
+const INLINE_UNSAFE_MIME = ['text/html', 'application/xhtml+xml', 'image/svg+xml', 'application/xml', 'text/xml', 'application/javascript', 'text/javascript', 'application/ecmascript'];
+
+function safeDownloadMime(mime) {
+    const m = String(mime || '').split(';')[0].trim().toLowerCase();
+    if (!m || INLINE_UNSAFE_MIME.indexOf(m) !== -1) return 'application/octet-stream';
+    return m;
+}
+
+// 纵深防御：正文已在不透明源 iframe 里，这里再剥掉脚本与内联事件处理器。
+function stripActiveContent(html) {
+    return String(html || '')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+        .replace(/<script\b[^>]*\/?>/gi, '')
+        .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+        .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+        .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+        .replace(/(href|src)\s*=\s*(["'])\s*javascript:/gi, '$1=$2blocked:');
+}
+
+const FRAME_CSS = 'html{color-scheme:light}'
+    + 'body{margin:0;padding:0 2px 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.7;color:#1f2937;word-break:break-word;overflow-wrap:anywhere}'
+    + 'img{max-width:100%;height:auto}table{max-width:100%}'
+    + 'blockquote{margin:0;padding-left:.8rem;border-left:3px solid #e5e7eb;color:#6b7280}'
+    + 'a{color:#4f46e5}'
+    + 'pre.plain{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit}';
+
+// 唯一的内联脚本：向父页面回报自身高度，父页面据此调整 iframe 高度。
+const FRAME_HEIGHT_SCRIPT = '(function(){'
+    + 'function s(){var d=document.documentElement,b=document.body;'
+    + 'var h=Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0);'
+    + 'try{parent.postMessage({__cfmailHeight:h},"*")}catch(e){}}'
+    + 'window.addEventListener("load",s);window.addEventListener("resize",s);'
+    + 'document.addEventListener("DOMContentLoaded",s);'
+    + 'if(window.ResizeObserver){try{new ResizeObserver(s).observe(document.documentElement)}catch(e){}}'
+    + 'setTimeout(s,300);setTimeout(s,1500)})();';
+
+function buildFrameDocument(email) {
+    let inner;
+    if (email.html) {
+        inner = stripActiveContent(email.html);
+    } else if (email.text && email.text.trim()) {
+        inner = '<pre class="plain">' + escapeHtml(email.text) + '</pre>';
+    } else {
+        inner = '<p style="color:#6b7280">（无正文内容，请查看附件）</p>';
+    }
+    return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+        + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        + '<meta name="referrer" content="no-referrer">'
+        + '<style>' + FRAME_CSS + '</style></head><body>'
+        + inner
+        + '<script>' + FRAME_HEIGHT_SCRIPT + '<\/script>'
+        + '</body></html>';
+}
+
+// ---------- 邮件详情渲染 ----------
+// 收件箱与回收站两条分支共用这一份，避免改一处漏一处。
+
+function renderEmailDetail(email, key, isTrash, uploaded) {
+    const fromRaw = String(email.headers['from'] || '');
+    const senderName = (fromRaw.split('<')[0] || '').trim().replace(/"/g, '') || '未知发件人';
+    const senderEmail = (fromRaw.match(/<([^>]+)>/) || [])[1] || fromRaw.replace(/[<>]/g, '').trim();
+    const initial = escapeHtml((senderName[0] || '?').toUpperCase());
+    const avatarColor = getAvatarColor(senderName);
+    const subject = email.headers['subject'] || '(无主题)';
+    const uploadedAt = new Date(uploaded);
+    const dateStr = Number.isNaN(uploadedAt.getTime())
+        ? ''
+        : uploadedAt.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const encodedKey = encodeURIComponent(key);
+
+    let attachmentsHtml = '';
+    if (email.attachments.length > 0) {
+        attachmentsHtml = `
+        <div class="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4">
+            <div class="flex items-center text-sm font-semibold text-gray-700 mb-3">${Icons.attach}<span class="ml-2">附件 (${email.attachments.length})</span></div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                ${email.attachments.map((att, index) => `
+                <div class="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div class="flex items-center min-w-0 flex-1 mr-2">
+                        <div class="bg-indigo-100 text-indigo-600 rounded-md p-1.5 mr-3 flex-shrink-0">${Icons.file}</div>
+                        <div class="min-w-0">
+                            <p class="text-sm font-medium text-gray-900 truncate" title="${escapeAttr(att.filename)}">${escapeHtml(att.filename)}</p>
+                            <p class="text-xs text-gray-500">${escapeHtml(att.sizeStr)}</p>
+                        </div>
+                    </div>
+                    <a href="/attachment/${encodedKey}/${index}" download="${escapeAttr(att.filename)}" class="text-indigo-600 hover:text-indigo-800 p-2 hover:bg-indigo-50 rounded-full transition active:scale-95" title="下载附件">${Icons.download}</a>
+                </div>`).join('')}
+            </div>
+        </div>`;
+    }
+
+    const toolbar = isTrash ? `
+        <div class="flex items-center space-x-1 sm:space-x-2">
+            <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
+                <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
+            </form>
+            <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)">
+                <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.trash} <span class="ml-1">删除</span></button>
+            </form>
+        </div>` : `
+        <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${escapeAttr(key)}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>`;
+
+    return `
+    <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
+        <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm">
+            <div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>
+            ${toolbar}
+        </div>
+        <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar">
+            <div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
+                <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${escapeHtml(subject)}</h1>
+                <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6">
+                    <div class="flex items-center overflow-hidden">
+                        <div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div>
+                        <div class="ml-3 sm:ml-4 min-w-0">
+                            <div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${escapeHtml(senderName)}</div>
+                            <div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${escapeHtml(senderEmail)}&gt;</div>
+                        </div>
+                    </div>
+                    <div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${escapeHtml(dateStr)}</div>
+                </div>
+                ${attachmentsHtml}
+                <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:60vh;min-height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
+                <p class="mt-3 text-xs text-gray-400">正文在沙箱中隔离渲染，邮件自带脚本与内联事件已被剥离。</p>
+            </div>
+        </div>
+    </div>`;
+}
 
 async function handleRequest(request, env, ctx) {
     const url = new URL(request.url);
     const method = request.method;
     const cookies = parseCookies(request);
 
-    if (url.pathname === '/manifest.json') return new Response(renderManifest(), { headers: { 'Content-Type': 'application/json' } });
-    if (url.pathname === '/logo.svg') return new Response(renderAppIcon(), { headers: { 'Content-Type': 'image/svg+xml' } });
-    if (url.pathname === '/sw.js') return new Response(renderServiceWorker(), { headers: { 'Content-Type': 'application/javascript' } });
+    if (url.pathname === '/manifest.json') return assetResponse(renderManifest(), 'application/json; charset=utf-8');
+    if (url.pathname === '/logo.svg') return assetResponse(renderAppIcon(), 'image/svg+xml; charset=utf-8');
+    if (url.pathname === '/sw.js') return assetResponse(renderServiceWorker(), 'application/javascript; charset=utf-8');
+    if (url.pathname === '/robots.txt') return textResponse('User-agent: *\nDisallow: /\n');
 
     let config = null;
     try {
@@ -542,55 +896,93 @@ async function handleRequest(request, env, ctx) {
     if (!config) {
         if (url.pathname === '/setup' && method === 'POST') {
             const fd = await request.formData();
+            const username = String(fd.get('username') || '').trim();
+            const password = String(fd.get('password') || '');
+            if (!username) return htmlResponse(renderSetup('用户名不能为空'), 400);
+            if (password.length < 8) return htmlResponse(renderSetup('密码至少需要 8 位'), 400);
+
+            const salt = randomHex(16);
             await env.MAIL_BUCKET.put(CONFIG_FILE, JSON.stringify({
-                username: fd.get('username'),
-                password: await hashPassword(fd.get('password')),
-                sessionToken: crypto.randomUUID()
-            }));
+                username: username,
+                salt: salt,
+                password: await hashPassword(password, salt),
+                sessionToken: randomHex(32),
+                sessionExpires: Date.now() + SESSION_TTL_MS,
+                createdAt: Date.now()
+            }), { httpMetadata: { contentType: 'application/json' } });
             return Response.redirect(url.origin + '/login', 302);
         }
-        return new Response(renderSetup(), { headers: { 'Content-Type': 'text/html' } });
+        return htmlResponse(renderSetup(''));
     }
 
     if (url.pathname === '/login') {
         const siteKey = env.TURNSTILE_SITE_KEY || '';
+        const ip = clientIp(request);
+
         if (method === 'POST') {
+            // 限流优先于一切校验：锁定期间即使口令正确也拒绝，否则限流形同虚设。
+            const lock = await getLoginLock(env, ip);
+            if (lock) {
+                const minutes = Math.max(1, Math.ceil((lock.until - Date.now()) / 60000));
+                return htmlResponse(renderLogin('尝试次数过多，请在 ' + minutes + ' 分钟后重试', siteKey), 429);
+            }
+
             const fd = await request.formData();
             if (siteKey && env.TURNSTILE_SECRET_KEY) {
                 const token = fd.get('cf-turnstile-response');
-                const ip = request.headers.get('CF-Connecting-IP');
                 const passed = await verifyTurnstile(token, env.TURNSTILE_SECRET_KEY, ip);
-                if (!passed) return new Response(renderLogin("验证码校验失败，请重试", siteKey), { headers: { 'Content-Type': 'text/html' } });
+                if (!passed) return htmlResponse(renderLogin('验证码校验失败，请重试', siteKey));
             }
-            if (fd.get('username') === config.username && await hashPassword(fd.get('password')) === config.password) {
+
+            const usernameOk = safeEqual(String(fd.get('username') || ''), String(config.username || ''));
+            const passwordOk = await verifyPassword(config, String(fd.get('password') || ''));
+
+            if (usernameOk && passwordOk) {
+                await clearLoginFailures(env, ip);
+                config.sessionExpires = Date.now() + SESSION_TTL_MS;
+                await env.MAIL_BUCKET.put(CONFIG_FILE, JSON.stringify(config), { httpMetadata: { contentType: 'application/json' } });
                 return new Response(null, {
                     status: 302,
-                    headers: { 'Set-Cookie': `${SESSION_NAME}=${config.sessionToken}; HttpOnly; Secure; Path=/; Max-Age=2592000`, 'Location': '/' }
+                    headers: Object.assign({}, BASE_HEADERS, {
+                        'Set-Cookie': SESSION_NAME + '=' + config.sessionToken + '; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
+                        'Location': '/'
+                    })
                 });
             }
-            return new Response(renderLogin("用户名或密码错误", siteKey), { headers: { 'Content-Type': 'text/html' } });
+
+            await noteLoginFailure(env, ip);
+            return htmlResponse(renderLogin('用户名或密码错误', siteKey));
         }
-        return new Response(renderLogin("", siteKey), { headers: { 'Content-Type': 'text/html' } });
+
+        return htmlResponse(renderLogin('', siteKey));
     }
 
-    if (cookies[SESSION_NAME] !== config.sessionToken) return Response.redirect(url.origin + '/login', 302);
-    if (url.pathname === '/logout') return new Response(null, { status: 302, headers: { 'Set-Cookie': `${SESSION_NAME}=; Path=/; Max-Age=0`, 'Location': '/login' }});
+    // 会话校验：token 必须匹配，且（如果配置了）未过期
+    const sessionToken = String(cookies[SESSION_NAME] || '');
+    const sessionValid = !!config.sessionToken
+        && safeEqual(sessionToken, String(config.sessionToken))
+        && (!config.sessionExpires || Date.now() < config.sessionExpires);
+    if (!sessionValid) return Response.redirect(url.origin + '/login', 302);
+
+    if (url.pathname === '/logout') {
+        return new Response(null, {
+            status: 302,
+            headers: Object.assign({}, BASE_HEADERS, {
+                'Set-Cookie': SESSION_NAME + '=; Path=/; Max-Age=0',
+                'Location': '/login'
+            })
+        });
+    }
 
     if (url.pathname === '/api/check') {
         const list = await env.MAIL_BUCKET.list({ limit: 10000 });
-        const emails = list.objects.filter(o => o.key !== CONFIG_FILE && !o.key.startsWith(TRASH_PREFIX));
-        emails.sort((a, b) => {
-            const getTs = (k) => {
-                const parts = k.replace(TRASH_PREFIX, '').split('_');
-                return parts.length > 0 ? parseInt(parts[0]) : 0;
-            };
-            return getTs(b.key) - getTs(a.key);
-        });
-        const latest = emails.length > 0 ? (() => {
-            const parts = emails[0].key.replace(TRASH_PREFIX, '').split('_');
-            return parts.length > 0 ? parseInt(parts[0]) : 0;
-        })() : 0;
-        return new Response(JSON.stringify({ latest }), { headers: { 'Content-Type': 'application/json' } });
+        let latest = 0;
+        for (const item of list.objects) {
+            if (!isMailKey(item.key)) continue;
+            const ts = keyTimestamp(item.key);
+            if (ts > latest) latest = ts;
+        }
+        return jsonResponse({ latest: latest });
     }
 
     if (url.pathname === '/delete' && method === 'POST') {
@@ -650,153 +1042,110 @@ async function handleRequest(request, env, ctx) {
         return Response.redirect(request.headers.get('Referer') || '/', 302);
     }
 
+    if (url.pathname.startsWith('/frame/')) {
+        const resolved = await resolveEmailKey(env, safeDecode(url.pathname.slice('/frame/'.length)));
+        if (!resolved) return textResponse('Not Found', 404);
+        const email = processEmail(bufferToBinaryString(await resolved.obj.arrayBuffer()));
+        return new Response(buildFrameDocument(email), {
+            headers: Object.assign({}, BASE_HEADERS, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'private, max-age=300',
+                'X-Frame-Options': 'SAMEORIGIN',
+                // 把正文强制关进不透明源沙箱：拿不到本站 Cookie / DOM / localStorage。
+                // img-src 放开是为了让邮件里的外链图片能显示；script-src 只放行我们注入的高度回报脚本。
+                'Content-Security-Policy': "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; img-src * data: cid:; style-src 'unsafe-inline' *; font-src * data:; script-src 'unsafe-inline'"
+            })
+        });
+    }
+
+    if (url.pathname.startsWith('/attachment/')) {
+        const rest = url.pathname.slice('/attachment/'.length);
+        const slash = rest.lastIndexOf('/');
+        if (slash < 0) return textResponse('Not Found', 404);
+
+        const resolved = await resolveEmailKey(env, safeDecode(rest.slice(0, slash)));
+        const index = parseInt(rest.slice(slash + 1), 10);
+        if (!resolved || !Number.isInteger(index) || index < 0) return textResponse('Not Found', 404);
+
+        const email = processEmail(bufferToBinaryString(await resolved.obj.arrayBuffer()));
+        const att = email.attachments[index];
+        if (!att) return textResponse('Not Found', 404);
+
+        const safeName = String(att.filename || 'download').replace(/[\r\n"]/g, '_');
+        const asciiName = safeName.replace(/[^\x20-\x7e]/g, '_');
+        const encodedName = encodeURIComponent(safeName).replace(/'/g, '%27');
+        return new Response(decodeToBytes(att.body, att.encoding), {
+            headers: Object.assign({}, BASE_HEADERS, {
+                // 危险 MIME 会被降级为 octet-stream，避免附件被当成页面渲染
+                'Content-Type': safeDownloadMime(att.mime),
+                'Content-Disposition': 'attachment; filename="' + asciiName + '"; filename*=UTF-8\'\'' + encodedName,
+                'Cache-Control': 'private, max-age=300'
+            })
+        });
+    }
+
     if (url.pathname.startsWith('/email/')) {
-        let key = decodeURIComponent(url.pathname.replace('/email/', ''));
-        let isTrash = false;
-        let obj = await env.MAIL_BUCKET.get(key);
-        if (!obj) {
-            key = TRASH_PREFIX + key;
-            obj = await env.MAIL_BUCKET.get(key);
-            isTrash = true;
-        }
-        if (!obj) return Response.redirect(url.origin + '/', 302);
+        const resolved = await resolveEmailKey(env, safeDecode(url.pathname.slice('/email/'.length)));
+        if (!resolved) return Response.redirect(url.origin + '/', 302);
 
-        if (!isTrash && obj.customMetadata?.isRead !== 'true') {
-            const buffer = await obj.arrayBuffer(); 
-            ctx.waitUntil(env.MAIL_BUCKET.put(key, buffer, { customMetadata: { isRead: 'true' } }));
-            const rawTextForUpdate = bufferToBinaryString(buffer); 
-            const email = processEmail(rawTextForUpdate);
-            
-             const senderName = (email.headers['from']?.split('<')[0] || 'Unknown').trim().replace(/"/g, '');
-             const senderEmail = (email.headers['from']?.match(/<([^>]+)>/) || [])[1] || '';
-             const initial = senderName[0]?.toUpperCase() || '?';
-             const avatarColor = getAvatarColor(senderName);
-             let attachmentsHtml = '';
-             if (email.attachments.length > 0) {
-                 attachmentsHtml = `
-                 <div class="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4">
-                     <div class="flex items-center text-sm font-semibold text-gray-700 mb-3">${Icons.attach} <span class="ml-2">附件 (${email.attachments.length})</span></div>
-                     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                         ${email.attachments.map(att => `
-                             <div class="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                                 <div class="flex items-center min-w-0 flex-1 mr-2"><div class="bg-indigo-100 text-indigo-600 rounded-md p-1.5 mr-3 flex-shrink-0"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></div><div class="min-w-0"><p class="text-sm font-medium text-gray-900 truncate" title="${att.filename}">${att.filename}</p><p class="text-xs text-gray-500">${att.size}</p></div></div>
-                                 ${att.data ? `<a href="${att.data}" download="${att.filename}" class="text-indigo-600 hover:text-indigo-800 p-2 hover:bg-indigo-50 rounded-full transition active:scale-95" title="下载">${Icons.download}</a>` : `<span class="text-xs text-gray-400">N/A</span>`}
-                             </div>`).join('')}
-                     </div>
-                 </div>`;
-             }
-             const toolbar = isTrash ? `
-                 <div class="flex items-center space-x-1 sm:space-x-2">
-                     <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
-                         <input type="hidden" name="key" value="${key}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
-                     </form>
-                     <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)">
-                         <input type="hidden" name="key" value="${key}"><button class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.trash} <span class="ml-1">删除</span></button>
-                     </form>
-                 </div>` : `
-                 <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${key}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>`;
-             const html = `
-             <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-                 <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm"><div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>${toolbar}</div>
-                 <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar"><div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
-                         <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${email.headers['subject'] || '(无主题)'}</h1>
-                         <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6"><div class="flex items-center overflow-hidden"><div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div><div class="ml-3 sm:ml-4 min-w-0"><div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${senderName}</div><div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${senderEmail}&gt;</div></div></div><div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${new Date(obj.uploaded).toLocaleDateString('zh-CN', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</div></div>
-                         ${attachmentsHtml}<div class="email-body prose prose-sm sm:prose max-w-none text-gray-800 leading-relaxed select-text pt-2 break-words">${email.body}</div>
-                 </div></div></div>`;
-             return new Response(renderLayout(html, isTrash ? 'trash' : 'inbox'), { headers: { 'Content-Type': 'text/html' } });
-
-        } else {
-             const buffer = await obj.arrayBuffer(); 
-             const rawText = bufferToBinaryString(buffer);
-             const email = processEmail(rawText);
-             
-             const senderName = (email.headers['from']?.split('<')[0] || 'Unknown').trim().replace(/"/g, '');
-             const senderEmail = (email.headers['from']?.match(/<([^>]+)>/) || [])[1] || '';
-             const initial = senderName[0]?.toUpperCase() || '?';
-             const avatarColor = getAvatarColor(senderName);
-             let attachmentsHtml = '';
-             if (email.attachments.length > 0) {
-                 attachmentsHtml = `
-                 <div class="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4">
-                     <div class="flex items-center text-sm font-semibold text-gray-700 mb-3">${Icons.attach} <span class="ml-2">附件 (${email.attachments.length})</span></div>
-                     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                         ${email.attachments.map(att => `
-                             <div class="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                                 <div class="flex items-center min-w-0 flex-1 mr-2"><div class="bg-indigo-100 text-indigo-600 rounded-md p-1.5 mr-3 flex-shrink-0"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></div><div class="min-w-0"><p class="text-sm font-medium text-gray-900 truncate" title="${att.filename}">${att.filename}</p><p class="text-xs text-gray-500">${att.size}</p></div></div>
-                                 ${att.data ? `<a href="${att.data}" download="${att.filename}" class="text-indigo-600 hover:text-indigo-800 p-2 hover:bg-indigo-50 rounded-full transition active:scale-95" title="下载">${Icons.download}</a>` : `<span class="text-xs text-gray-400">N/A</span>`}
-                             </div>`).join('')}
-                     </div>
-                 </div>`;
-             }
-             const toolbar = isTrash ? `
-                 <div class="flex items-center space-x-1 sm:space-x-2">
-                     <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
-                         <input type="hidden" name="key" value="${key}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
-                     </form>
-                     <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)">
-                         <input type="hidden" name="key" value="${key}"><button class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.trash} <span class="ml-1">删除</span></button>
-                     </form>
-                 </div>` : `
-                 <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${key}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>`;
-             const html = `
-             <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-                 <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm"><div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>${toolbar}</div>
-                 <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar"><div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
-                         <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${email.headers['subject'] || '(无主题)'}</h1>
-                         <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6"><div class="flex items-center overflow-hidden"><div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div><div class="ml-3 sm:ml-4 min-w-0"><div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${senderName}</div><div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${senderEmail}&gt;</div></div></div><div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1">${new Date(obj.uploaded).toLocaleDateString('zh-CN', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</div></div>
-                         ${attachmentsHtml}<div class="email-body prose prose-sm sm:prose max-w-none text-gray-800 leading-relaxed select-text pt-2 break-words">${email.body}</div>
-                 </div></div></div>`;
-             return new Response(renderLayout(html, isTrash ? 'trash' : 'inbox'), { headers: { 'Content-Type': 'text/html' } });
+        // 只读一次 body：R2ObjectBody 的流被消费后不能重复读取
+        const buffer = await resolved.obj.arrayBuffer();
+        if (!resolved.isTrash && resolved.obj.customMetadata?.isRead !== 'true') {
+            ctx.waitUntil(env.MAIL_BUCKET.put(resolved.key, buffer, { customMetadata: { isRead: 'true' } }));
         }
+
+        const email = processEmail(bufferToBinaryString(buffer));
+        return htmlResponse(renderLayout(
+            renderEmailDetail(email, resolved.key, resolved.isTrash, resolved.obj.uploaded),
+            resolved.isTrash ? 'trash' : 'inbox'
+        ));
     }
 
     const isTrashPage = url.pathname === '/trash';
     if (url.pathname === '/' || isTrashPage) {
         const options = isTrashPage ? { prefix: TRASH_PREFIX, limit: 50, include: ['customMetadata'] } : { limit: 100, include: ['customMetadata'] };
         const list = await env.MAIL_BUCKET.list(options);
-        const emails = list.objects.filter(o => o.key !== CONFIG_FILE).filter(o => isTrashPage ? true : !o.key.startsWith(TRASH_PREFIX));
-        
-        emails.sort((a, b) => {
-            const getTs = (k) => {
-                const parts = k.replace(TRASH_PREFIX, '').split('_');
-                return parts.length > 0 ? parseInt(parts[0]) : 0;
-            };
-            return getTs(b.key) - getTs(a.key);
-        });
+        // 排除配置文件与内部系统键（登录限流计数等），回收站页用 prefix 天然隔离
+        const emails = list.objects.filter(o => isTrashPage ? true : isMailKey(o.key));
+
+        emails.sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
 
         const listHtml = emails.map(e => {
             const fullKey = e.key;
             const displayKey = isTrashPage ? e.key.replace(TRASH_PREFIX, '') : e.key;
-            
+
             const parts = displayKey.split('_');
-            const senderRaw = parts.length > 1 ? parts[1] : 'Unknown';
-            let senderName = senderRaw.includes('<') ? senderRaw.split('<')[0].replace(/"/g, '').trim() : senderRaw;
-            senderName = decodeHeaderValue(senderName);
-            
-            const subjectRaw = parts.length > 2 ? parts.slice(2).join('_').replace('.eml', '') : displayKey;
+            const senderRaw = parts.length > 1 ? parts[1] : '未知发件人';
+            const senderName = decodeHeaderValue(senderRaw.includes('<') ? senderRaw.split('<')[0].replace(/"/g, '').trim() : senderRaw) || '未知发件人';
+
+            const subjectRaw = parts.length > 2 ? parts.slice(2).join('_').replace(/\.eml$/i, '') : displayKey;
             let subject = subjectRaw;
-            try { subject = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch(e){}
-            subject = decodeHeaderValue(subject);
-            
+            try { subject = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch (e) {}
+            subject = decodeHeaderValue(subject) || '(无主题)';
+
             const color = getAvatarColor(senderName);
-            const timeStr = new Date(parseInt(parts[0])).toLocaleDateString('zh-CN', {month:'short', day:'numeric'});
-            
+            const ts = keyTimestamp(displayKey);
+            const timeStr = ts > 0 ? new Date(ts).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) : '';
+
             const isRead = e.customMetadata?.isRead === 'true';
             const fontWeight = isRead ? 'font-normal' : 'font-semibold';
             const textColor = isRead ? 'text-gray-600' : 'text-gray-900';
-            const dotHtml = !isRead && !isTrashPage ? `<span class="unread-dot"></span>` : '';
+            const dotHtml = !isRead && !isTrashPage ? '<span class="unread-dot"></span>' : '';
 
+            // 主题与发件人完全由发件人控制，必须转义后才能拼进 HTML。
+            // 行点击改成 data-key + 事件委托：原来拼进 onclick 单引号字符串里，
+            // 而 encodeURIComponent 不转义单引号，主题带一个单引号就能注入脚本。
             return `
-            <div class="group email-row block bg-white hover:bg-gray-50 border-b border-gray-100 transition-all cursor-pointer relative select-none" onclick="window.location.href='/email/${encodeURIComponent(displayKey)}'">
+            <div class="group email-row block bg-white hover:bg-gray-50 border-b border-gray-100 transition-all cursor-pointer relative select-none" data-key="${escapeAttr(encodeURIComponent(displayKey))}">
                 <div class="px-3 sm:px-6 py-3 sm:py-4 flex items-center">
-                    <div class="flex-shrink-0 mr-3 sm:mr-4 z-20 h-full flex items-center" onclick="event.stopPropagation()"><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" name="keys" value="${fullKey}" class="hidden" onchange="updateRowStyle(this)"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
-                    <div class="flex-shrink-0 mr-3 sm:mr-5"><div class="w-10 h-10 ${color} rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">${senderName[0]?.toUpperCase()}</div></div>
+                    <div class="flex-shrink-0 mr-3 sm:mr-4 z-20 h-full flex items-center"><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" name="keys" value="${escapeAttr(fullKey)}" class="hidden" onchange="updateRowStyle(this)"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
+                    <div class="flex-shrink-0 mr-3 sm:mr-5"><div class="w-10 h-10 ${color} rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">${escapeHtml((senderName[0] || '?').toUpperCase())}</div></div>
                     <div class="min-w-0 flex-1 flex flex-col justify-center">
                         <div class="flex justify-between items-baseline mb-1">
-                            <p class="text-sm sm:text-base ${fontWeight} ${isRead ? 'text-gray-900' : 'text-gray-900'} truncate mr-2">${dotHtml}${senderName}</p>
-                            <p class="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">${timeStr}</p>
+                            <p class="text-sm sm:text-base ${fontWeight} text-gray-900 truncate mr-2">${dotHtml}${escapeHtml(senderName)}</p>
+                            <p class="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">${escapeHtml(timeStr)}</p>
                         </div>
-                        <p class="text-sm ${textColor} truncate leading-snug"><span class="${fontWeight}">${subject}</span></p>
+                        <p class="text-sm ${textColor} truncate leading-snug"><span class="${fontWeight}">${escapeHtml(subject)}</span></p>
                     </div>
                 </div></div>`;
         }).join('');
@@ -809,11 +1158,7 @@ async function handleRequest(request, env, ctx) {
             <button onclick="confirmBatch('mark_unread')" class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]" title="标记为未读">${Icons.unread}</button>
             <button onclick="confirmBatch('delete')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash}</button>`;
             
-        let latestTimestamp = 0;
-        if (emails.length > 0) {
-             const parts = emails[0].key.replace(TRASH_PREFIX, '').split('_');
-             latestTimestamp = parts.length > 0 ? parseInt(parts[0]) : 0;
-        }
+        const latestTimestamp = emails.length > 0 ? keyTimestamp(emails[0].key) : 0;
 
         const html = `
         <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
@@ -826,9 +1171,9 @@ async function handleRequest(request, env, ctx) {
             </div>
             <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom">${emails.length > 0 ? listHtml : emptyState}</form>
         </div>`;
-        return new Response(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp), { headers: { 'Content-Type': 'text/html' } });
+        return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp));
     }
-    return new Response("Not Found", { status: 404 });
+    return textResponse('Not Found', 404);
 }
 
 // ==========================================
@@ -836,26 +1181,46 @@ async function handleRequest(request, env, ctx) {
 // ==========================================
 export default {
     async fetch(request, env, ctx) {
-        try { return await handleRequest(request, env, ctx); } 
-        catch (e) { return new Response(`App Error: ${e.message}`, { status: 500 }); }
-    },
-    async email(message, env, ctx) {
-        if (!env.MAIL_BUCKET) return;
+        if (!env.MAIL_BUCKET) {
+            return textResponse('服务未正确配置：缺少 MAIL_BUCKET 绑定（R2）。请确认 wrangler.jsonc 中的 r2_buckets 配置存在后重新部署。', 500);
+        }
         try {
-            const subject = message.headers.get("subject") || "No_Subject";
-            const from = message.from || "Unknown";
-            const safeSubject = subject.replace(/[\/\\:*?"<>|\r\n]/g, "_").trim().substring(0, 60);
-            const key = `${Date.now()}_${from}_${safeSubject}.eml`;
-            
-            const rawData = await new Response(message.raw).arrayBuffer(); 
-            await env.MAIL_BUCKET.put(key, rawData);
+            return await handleRequest(request, env, ctx);
+        } catch (e) {
+            // 不把异常细节回显给客户端（会泄漏内部结构），完整堆栈只进日志
+            console.error('Request failed:', e && e.stack ? e.stack : e);
+            return htmlResponse('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>服务异常</title><script src="https://cdn.tailwindcss.com"></script></head><body class="h-screen flex items-center justify-center bg-gray-50"><div class="text-center p-8"><h1 class="text-2xl font-bold text-gray-900 mb-2">服务暂时不可用</h1><p class="text-gray-500 text-sm">请稍后重试。若持续出现，请查看 Worker 日志（Dashboard 的 Logs 页或 wrangler tail）。</p></div></body></html>', 500);
+        }
+    },
 
-            const forwardTo = env.FORWARD_EMAIL; 
-            if (forwardTo) {
-                await message.forward(forwardTo);
+    async email(message, env, ctx) {
+        if (!env.MAIL_BUCKET) {
+            console.error('MAIL_BUCKET 绑定缺失，邮件未存储');
+            return;
+        }
+
+        const subject = message.headers.get('subject') || 'No_Subject';
+        const from = message.from || 'Unknown';
+        // 键名里的非法字符必须清掉，否则会破坏列表页对「时间戳_发件人_主题」的解析
+        const safeSubject = subject.replace(/[\/\\:*?"<>|\r\n]/g, '_').trim().slice(0, 60) || 'No_Subject';
+        const key = Date.now() + '_' + from + '_' + safeSubject + '.eml';
+
+        try {
+            const rawData = await new Response(message.raw).arrayBuffer();
+            await env.MAIL_BUCKET.put(key, rawData, { customMetadata: { isRead: 'false' } });
+        } catch (e) {
+            // 入库失败必须留下日志，否则邮件会静默丢失
+            console.error('Failed to store email:', e && e.stack ? e.stack : e);
+            return;
+        }
+
+        // 邮件已入库，转发失败不应影响主流程
+        if (env.FORWARD_EMAIL) {
+            try {
+                await message.forward(env.FORWARD_EMAIL);
+            } catch (e) {
+                console.error('Forward failed:', e && e.stack ? e.stack : e);
             }
-        } catch (e) { 
-            console.error("Email processing error:", e); 
         }
     }
 };

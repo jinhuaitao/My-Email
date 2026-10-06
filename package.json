@@ -1,0 +1,24 @@
+{
+  "name": "cf-webmail-client",
+  "version": "1.0.0",
+  "private": true,
+  "description": "基于 Cloudflare Workers 的无服务器网页邮箱：Email Routing 收信、R2 存储、内置 MIME 解析内核。",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --outdir=.wrangler/dry-run",
+    "test": "node tests/regression.test.mjs",
+    "types": "wrangler types",
+    "tail": "wrangler tail",
+    "whoami": "wrangler whoami",
+    "secret:turnstile": "wrangler secret put TURNSTILE_SECRET_KEY"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

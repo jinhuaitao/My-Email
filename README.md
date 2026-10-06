@@ -1,76 +1,270 @@
-# 🚀 Cloudflare Workers 邮箱客户端部署教程
-本项目是一个基于 Cloudflare Workers 的无服务器邮件客户端，它利用 Cloudflare Email Routing 接收邮件，并使用 R2 存储服务保存邮件，实现了一个轻量级的网页邮箱。
+# CF Webmail · Cloudflare Workers 无服务器邮箱
 
-📦 准备工作
-在开始部署之前，您需要具备以下条件：
+基于 Cloudflare Workers 的轻量网页邮箱：用 **Email Routing** 收信，原始 `.eml` 存入 **R2**，同一个 Worker 同时负责前端渲染与邮件解析。没有服务器、没有数据库，全部跑在 Cloudflare 免费额度内。
 
-一个 Cloudflare 账户：已配置 DNS 解析并启用 Email Routing 的域名。
+**目录**
 
-# 步骤一：创建 R2 存储桶和 Workers 服务
-1.您需要一个 R2 存储桶来存储邮件和系统配置，以及一个 Worker 服务来运行前端代码和邮件处理逻辑。
+- [特性](#特性)
+- [架构](#架构)
+- [项目结构](#项目结构)
+- [部署（Dashboard 连接 GitHub，推荐）](#部署dashboard-连接-github推荐)
+- [本地开发](#本地开发)
+- [配置参考](#配置参考)
+- [安全设计](#安全设计)
+- [运维与排查](#运维与排查)
+- [成本](#成本)
+- [已知取舍](#已知取舍)
+- [许可](#许可)
 
+---
 
-2. 创建 R2 存储桶
-使用以下命令创建 R2 存储桶。请将 mail-storage-bucket 替换为您希望的存储桶名称。
+## 特性
 
+| 能力 | 说明 |
+| --- | --- |
+| **一键部署** | `wrangler.jsonc` 里 R2 只写绑定名、不写桶名 → 首次部署时 Cloudflare **自动创建 R2 桶并自动绑定**，无需手工建资源 |
+| **免控制台点资源** | R2 / Workers AI 绑定全部由配置文件驱动；只有三个可选变量需要在 Dashboard 填一次 |
+| **健壮的 MIME 解析内核** | base64 / quoted-printable、嵌套 multipart、RFC 2047 头部折叠（Header Folding）、GBK 乱码自动嗅探回退 |
+| **正文沙箱渲染** | 邮件正文放在**不透明源 iframe** 中并剥离脚本与内联事件，恶意邮件无法触碰你的会话 |
+| **附件流式下载** | 附件不进 HTML，按需从 R2 解码返回；10MB 附件也不会把页面撑爆 |
+| **完整邮件管理** | 收件箱 / 回收站、批量操作、已读未读、PWA 可安装 |
+| **可选人机验证** | Turnstile **成对配置才启用**，不配置就自动跳过，不会把人锁在门外 |
+| **登录防护** | 加盐口令哈希、常量时间比对、按 IP 限流、服务端会话过期 |
+| **可观测性** | 开启 `observability` + `upload_source_maps`，日志堆栈可直接映射到源码行号 |
 
-# R2 存储绑定
-[[r2_buckets]]
-binding = "MAIL_BUCKET" # 必须与代码中的 env.MAIL_BUCKET 匹配
-bucket_name = "mail-storage-bucket" # 替换为你在上一步创建的存储桶名称
+---
 
-# 步骤二：环境变量 (可选，但推荐)
-## ⚠️ 用于登录页面的 Cloudflare Turnstile 验证码，可选。
-##    如果不设置，登录将跳过验证码。
-  TURNSTILE_SITE_KEY = "你的 Site Key"
-  TURNSTILE_SECRET_KEY = "你的 Secret Key"
+## 架构
 
-## 用于转发到其他邮箱
-FORWARD_EMAIL = "你的转发邮箱"
+```
+发件人
+  │  SMTP
+  ▼
+Cloudflare Email Routing ──(Send to a Worker)──▶  Worker.email()
+                                                      │  原始 .eml
+                                                      ▼
+                                                 ┌──────────┐
+                                                 │    R2    │  env.MAIL_BUCKET
+                                                 └──────────┘
+                                                      ▲
+浏览器 ── HTTPS ──▶ Worker.fetch() ────────────────────┘
+                      │
+                      ├─ /                        收件箱列表
+                      ├─ /email/<key>             邮件详情（正文走 iframe）
+                      ├─ /frame/<key>             沙箱化正文文档
+                      ├─ /attachment/<key>/<n>    附件流式下载
+                      ├─ /trash /delete /restore /purge /batch-action
+                      └─ /login /logout /setup /api/check
+```
 
-# 步骤三：配置 Email Routing 路由到 Worker
-现在您需要告诉 Cloudflare 将特定邮箱地址的邮件转发到您刚刚部署的 Worker。
+**R2 键名约定**
 
-1. 登录 Cloudflare 控制台
-进入您的域名管理页面，选择 Email（电子邮件）-> Routes（路由）。
+| 键 | 用途 |
+| --- | --- |
+| `sys_config.json` | 管理员账号（加盐哈希）、会话 token 与过期时间 |
+| `<时间戳>_<发件人>_<主题>.eml` | 收件箱邮件（原始 MIME 全文） |
+| `trash/<原键名>` | 回收站中的邮件 |
+| `_sys/login_fail_<ip>` | 登录限流计数（内部键，永不进列表） |
 
-2. 添加 Worker 路由
-点击 Create address（创建地址），配置如下：
+---
 
-Custom address（自定义地址）：
+## 项目结构
 
-地址：填写您在 wrangler.toml 中 [[rules]].pattern 配置的邮箱地址（例如 inbox）。
+| 文件 | 说明 |
+| --- | --- |
+| `workers.js` | 全部业务代码：前端页面 + 邮件接收 + MIME 解析 + 路由（单文件 Worker） |
+| `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 直接调 `fetch`，30 条用例覆盖登录、鉴权、XSS、沙箱、附件 |
+| `wrangler.jsonc` | 部署配置。**R2 自动创建 + 自动绑定**，并绑定 Workers AI |
+| `package.json` / `package-lock.json` | 依赖与脚本，锁文件保证构建可复现 |
+| `.dev.vars.example` | 本地开发变量模板（复制为 `.dev.vars`） |
+| `.github/workflows/ci.yml` | CI：语法检查 + 离线校验部署配置 |
+| `LICENSE` | MIT |
 
-域名：选择您的域名。
+---
 
-Action（操作）：选择 Send to a Worker（发送到 Worker）。
+## 部署（Dashboard 连接 GitHub，推荐）
 
-Worker：在下拉列表中选择您刚刚部署的 Worker 名称（即 cf-webmail-client）。
+### 前置条件
 
-Save（保存）。
+1. 一个 Cloudflare 账号，域名已托管在 Cloudflare（DNS 生效）。
+2. 该域名已启用 **Email Routing**。
+3. **先开通 R2**：Dashboard → **R2** → 点一次同意条款。
+   > ⚠️ 这是最关键的一步。账号没开通 R2 时，自动创建桶会直接失败 —— 这是部署失败最常见的原因。
+4. 代码已推送到你的 GitHub 仓库。
 
-现在，所有发送到 inbox@yourdomain.com 的邮件都会触发您的 Worker 运行 export default { async email(...) } 函数，并将原始邮件存储到 R2 存储桶中。
+### 步骤一：创建 Worker 项目
 
-# 步骤四：访问和初始化
-Worker 部署完成后，您可以通过以下步骤首次访问：
+**Workers & Pages** → **Create** → **Workers** → **Connect to Git** → 选择仓库，然后按下表填写：
 
-1. 访问 Worker URL
-在浏览器中打开您的 Worker URL（例如 https://cf-webmail-client.<your-subdomain>.workers.dev/）。
+| 配置项 | 值 |
+| --- | --- |
+| **Project name** | `cf-webmail-client` ← **必须与 `wrangler.jsonc` 里的 `name` 完全一致** |
+| **Build command** | `npm install` |
+| **Deploy command** | `npx wrangler deploy` |
 
-2. 初始化管理员账号
-由于是首次访问，Worker 会检测到 R2 中没有配置文件，并自动跳转到初始化页面。
+点 **Deploy**。首次部署会自动发生两件事：
 
-填写您想要的用户名和密码。
+- **R2 自动创建 + 自动绑定**：`wrangler.jsonc` 里 R2 只有 `"binding": "MAIL_BUCKET"`、没有 `bucket_name`，Cloudflare 会自动建桶（以 Worker 名为前缀命名，具体名称以 Dashboard 为准）并绑定到 `env.MAIL_BUCKET`。**不需要手动建桶，也不需要改代码。**
+- **Workers AI 自动绑定**：`"ai": { "binding": "AI" }` 绑定为 `env.AI`，无需创建资源。
+  当前版本**尚未调用 AI**，属于预留能力（绑定本身不产生费用），后续可直接 `env.AI.run(...)`。
 
-点击 完成设置并登录。
+> ⚠️ **通过 Dashboard 部署时，自动创建出来的资源 ID 不会写回你的 GitHub 仓库**，只能在 Dashboard 查看。
+> 若以后想改用本地 `wrangler deploy`，请先把桶名/ID 从 Dashboard 复制进 `wrangler.jsonc`，
+> 否则 wrangler 会当成「没有绑定」再创建一套新资源 —— 你会以为线上邮件全丢了。
 
-设置完成后，系统会跳转到登录页面，您就可以使用刚刚设置的账号登录，开始使用您的无服务器网页邮箱了。
+### 步骤二：配置变量与密钥
 
-📝 补充说明：Turnstile 验证码
-如果您希望在登录页面启用 Cloudflare Turnstile 验证码（防止暴力破解），请执行以下操作：
+Dashboard → **Workers & Pages** → `cf-webmail-client` → **Settings** → **Variables and Secrets**：
 
-在 Cloudflare 控制台申请 Turnstile Site Key 和 Secret Key。
+| 名称 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `FORWARD_EMAIL` | Text | 否 | 收到邮件后自动转发到这个邮箱；留空 = 不转发 |
+| `TURNSTILE_SITE_KEY` | Text | 否 | Turnstile 的 Site Key（公开值） |
+| `TURNSTILE_SECRET_KEY` | **Secret** | 否 | Turnstile 的 Secret Key（密钥，必须选 Secret 类型） |
 
-将这两个 Key 填写到您 wrangler.toml 文件中的 [vars] 部分（参照步骤一的模板）。
+保存后如未生效，到 **Deployments** 点一次 **Retry deployment**。
 
-重新部署 Worker (wrangler deploy)。
+> **为什么 `wrangler.jsonc` 里没有直接写这三个变量？**
+> 因为配置文件里出现过的变量会**覆盖** Dashboard 上的同名变量：写空值或假占位值，
+> 等于把你已经配好的真实值清掉（转发失效、验证码永远过不去）。
+> 而且 `TURNSTILE_SECRET_KEY` 是密钥，写进仓库等于明文提交到 Git。
+
+### 步骤三：把邮件路由到 Worker
+
+域名管理页 → **Email** → **Email Routing** → **Routes** → **Create address**：
+
+- **Custom address**：如 `inbox`
+- **Domain**：你的域名
+- **Action**：**Send to a Worker**
+- **Worker**：`cf-webmail-client`
+
+保存后，所有发往 `inbox@yourdomain.com` 的邮件都会触发 `export default { async email(...) }`，原始邮件写入 R2。
+
+### 步骤四：首次访问与初始化
+
+1. 打开 Worker URL（`https://cf-webmail-client.<你的子域>.workers.dev/`）。
+2. R2 中还没有配置文件，Worker 会自动跳到**初始化页面**。
+3. 设置管理员用户名和密码（**密码至少 8 位**），点「完成设置并登录」。
+4. 之后用该账号登录即可。
+
+### 部署检查清单
+
+- [ ] 账号已开通 R2（Dashboard → R2 能看到桶列表）
+- [ ] 域名已启用 Email Routing
+- [ ] Workers 项目的 Project name 与 `wrangler.jsonc` 的 `name` 一致
+- [ ] Deploy command 是 `npx wrangler deploy`
+- [ ] 首次部署日志里没有 R2 相关报错
+- [ ] Email Routing 里已建好指向该 Worker 的地址
+- [ ] 已完成管理员初始化并能成功登录
+
+---
+
+## 本地开发
+
+```bash
+npm install
+cp .dev.vars.example .dev.vars   # 填入本地测试用的变量
+npm run dev                      # 本地跑，自动创建本地 R2（存在 .wrangler/，不影响线上）
+```
+
+其他脚本：
+
+| 命令 | 作用 |
+| --- | --- |
+| `npm test` | 跑回归测试（**零依赖、不联网、不碰线上数据**） |
+| `npm run check` | **离线**校验部署配置（不需要登录、不需要账号） |
+| `npm run deploy` | 本地 CLI 部署（会把你创建的资源 ID 写回配置） |
+| `npm run tail` | 实时查看线上日志 |
+| `npm run types` | 生成 `worker-configuration.d.ts`，让编辑器识别 `env` 上的绑定 |
+
+`npm run check` 的正常输出：
+
+```
+Your Worker has access to the following bindings:
+Binding                 Resource
+env.MAIL_BUCKET         R2 Bucket
+env.AI                  AI
+```
+
+---
+
+## 配置参考
+
+### 绑定
+
+| 绑定 | 类型 | 来源 | 代码中的用法 |
+| --- | --- | --- | --- |
+| `MAIL_BUCKET` | R2 桶 | `wrangler.jsonc` 自动创建 | `env.MAIL_BUCKET` |
+| `AI` | Workers AI | `wrangler.jsonc` 自动绑定（预留） | `env.AI` |
+
+### 变量
+
+| 变量 | 类型 | 默认行为 | 代码中的用法 |
+| --- | --- | --- | --- |
+| `FORWARD_EMAIL` | 文本 | 未设置 → 不转发 | 存库成功后调用 `message.forward()` |
+| `TURNSTILE_SITE_KEY` | 文本 | 未设置 → 登录页不渲染验证码 | 注入登录页 `data-sitekey` |
+| `TURNSTILE_SECRET_KEY` | 密钥 | 未设置 → 跳过服务端校验 | 调 Turnstile `siteverify` |
+
+**只有两个 Turnstile 变量同时存在时验证才会启用**（`siteKey && secretKey`）。
+只填一个属于半配置：服务端会直接跳过校验，登录页也不渲染组件 —— 不会把人锁死。
+
+---
+
+## 安全设计
+
+| 风险 | 处理方式 |
+| --- | --- |
+| **邮件内容 XSS** | 主题、发件人、附件名等完全由发件人控制，渲染前统一 `escapeHtml()` |
+| **点击行 XSS** | 不再把键名拼进 `onclick` 字符串（`encodeURIComponent` **不转义单引号**），改为 `data-key` + 事件委托 |
+| **正文脚本执行** | 正文在不透明源 iframe 中渲染（`sandbox` 属性 + CSP `sandbox`），并额外剥离 `<script>` 与内联 `on*` 事件 |
+| **附件类型混淆** | `text/html` / `image/svg+xml` 等危险 MIME 一律降级为 `application/octet-stream` + `Content-Disposition: attachment` |
+| **口令存储** | 加盐 SHA-256（每账号 16 字节随机盐），并兼容早期无盐数据 |
+| **口令比对** | 常量时间 `safeEqual`，避免逐字符提前返回泄漏前缀信息 |
+| **暴力破解** | 按 `CF-Connecting-IP` 限流：15 分钟窗口内失败 8 次 → 锁定 10 分钟（**锁定期间即使口令正确也拒绝**） |
+| **会话** | 32 字节随机 token、`HttpOnly` + `Secure` + `SameSite=Lax`、服务端校验 30 天过期 |
+| **信息泄漏** | 未捕获异常只写日志，不把堆栈回显给客户端；页面统一 `no-store` + `noindex` |
+| **搜索引擎收录** | 全站 `X-Robots-Tag: noindex`，并提供 `robots.txt` 拒绝抓取 |
+| **点击劫持** | 页面响应带 `X-Frame-Options: DENY`（正文 iframe 单独用 `SAMEORIGIN`） |
+
+---
+
+## 运维与排查
+
+| 症状 | 原因与处理 |
+| --- | --- |
+| 部署失败，日志提示 R2 相关错误 | 账号还没开通 R2。Dashboard → R2 点一次同意条款后重新部署 |
+| 改了 Dashboard 变量没生效 | 到 Deployments 点一次 **Retry deployment** |
+| 登录页报「尝试次数过多」 | 触发了 IP 限流。等待 10 分钟，或删除 R2 中的 `_sys/login_fail_<你的IP>` 键 |
+| Turnstile 一直不过 | 两个 Key 必须来自同一个 Turnstile 站点且成对配置。想临时关闭：删掉两个变量后重新部署 |
+| 中文邮件乱码 | 解析内核已内置 GBK 回退：UTF-8 解出替换字符（�）时自动改用 GBK 重解，并择错误更少的结果 |
+| 邮件正文被当成附件 | 极少数畸形邮件。解析器有「绝望模式」容错，会把疑似正文的附件内容强行显示出来 |
+| 忘记管理员密码 | 删除 R2 中的 `sys_config.json`，重新访问站点即回到初始化页面（**注意：会一并清掉会话**） |
+| 想改成单文件版本 | 把 `workers.js` 改名为 `_worker.js` 放进 Cloudflare Pages 的静态目录即可 |
+
+查看线上日志：Dashboard → 你的 Worker → **Logs**，或本地 `npm run tail`。
+
+---
+
+## 成本
+
+全部在 Cloudflare 免费额度内：
+
+- **Workers**：免费版每天 10 万次请求
+- **Email Routing**：接收邮件免费，不限量
+- **R2**：10 GB 存储 + 每月 100 万次 A 类操作免费，且**出网流量免费**
+- **Workers AI**：仅绑定不调用，不产生费用
+
+---
+
+## 已知取舍
+
+- **Tailwind 走 CDN**：页面引用 `https://cdn.tailwindcss.com`，省掉了构建步骤，代价是首屏多一个外部请求。若追求极致性能，可改用 Tailwind CLI 在构建阶段产出 CSS，再改走静态路由。
+- **变量放在 Dashboard 而非配置文件**：换来了密钥不进 Git，代价是 fork 后需要手动填一次。
+- **邮件保存在 R2 而非数据库**：列表页靠键名解析出发件人与主题，因此发件人/主题中含 `_` 时会解析不准（不影响正文）。
+- **正文 iframe 允许脚本**：为了让注入的「高度自适应」脚本生效。由于沙箱是不透明源，邮件自带脚本拿不到本站 Cookie / DOM / localStorage，风险已被隔离。若你更保守，可把 iframe 的 `sandbox` 与 CSP 中的 `allow-scripts` 去掉，代价是正文高度固定为 `60vh`。
+
+---
+
+## 许可
+
+[MIT](LICENSE)

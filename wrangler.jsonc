@@ -1,0 +1,57 @@
+{
+  // 编辑器补全用，没有也不影响部署
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  // Worker 名称。
+  // 自动创建出来的资源（R2 桶等）会以这个名字作为前缀命名。
+  // ⚠️ Dashboard 里创建项目时，Project name 必须与这里完全一致，否则会创建出两套资源。
+  "name": "cf-webmail-client",
+
+  "main": "workers.js",
+  "compatibility_date": "2026-10-06",
+
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  // 上传 source map：日志里的异常堆栈能映射回 workers.js 的真实行号，排查问题必备
+  "upload_source_maps": true,
+
+  // ===========================================================================
+  // R2 绑定 —— 自动创建 + 自动绑定
+  // 这里故意只写 binding，不写 bucket_name。
+  // 首次部署时 Cloudflare 会自动创建一个 R2 桶并绑定到 env.MAIL_BUCKET。
+  //
+  // ⚠️ 前提：账号必须先开通 R2（Dashboard → R2 → 点一次同意条款），
+  //    否则自动创建桶会失败，这是最常见的部署失败原因。
+  // ===========================================================================
+  "r2_buckets": [
+    { "binding": "MAIL_BUCKET" }
+  ],
+
+  // Workers AI 绑定（自动绑定，无需手动创建资源）。
+  // 说明：当前 workers.js 里还没有调用 AI，这里是预留绑定，
+  // 绑定本身不产生费用，后续代码里可直接用 env.AI.run(...)。
+  "ai": { "binding": "AI" }
+
+  // ===========================================================================
+  // 环境变量 —— 这里刻意全部注释掉，不要写占位值或空字符串！
+  //
+  // 原因：配置文件里出现过的变量会「覆盖」Dashboard 上的同名变量，
+  // 写空值 / 假占位值 = 把你已经配好的真实值清掉（转发失效、验证码永远过不去）。
+  //
+  // 推荐做法：部署完成后到
+  //   Cloudflare Dashboard → Workers & Pages → cf-webmail-client → Settings
+  //   → Variables and Secrets 里配置：
+  //
+  //   FORWARD_EMAIL         类型 Text    收件后自动转发到这个邮箱，留空 = 不转发
+  //   TURNSTILE_SITE_KEY    类型 Text    Turnstile 的 Site Key（公开值）
+  //   TURNSTILE_SECRET_KEY  类型 Secret  Turnstile 的 Secret Key（密钥，必须加密存储）
+  //
+  // 如果你确实想把变量写进文件（方便 fork 后一键部署），取消下面注释并填真实值。
+  // ⚠️ TURNSTILE_SECRET_KEY 不建议写在这里 —— 会明文提交进 Git 仓库。
+  // ===========================================================================
+  // "vars": {
+  //   "FORWARD_EMAIL": "you@example.com",
+  //   "TURNSTILE_SITE_KEY": "0x4AAAAAAAxxxxxxxxxxxxxxxx"
+  // }
+}
