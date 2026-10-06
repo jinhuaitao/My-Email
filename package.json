@@ -13,6 +13,7 @@
     "deploy": "wrangler deploy",
     "check": "wrangler deploy --dry-run --outdir=.wrangler/dry-run",
     "test": "node tests/regression.test.mjs",
+    "preview": "node tools/render-preview.mjs",
     "types": "wrangler types",
     "tail": "wrangler tail",
     "whoami": "wrangler whoami",

@@ -452,6 +452,45 @@ function isMailKey(key) {
     return key !== CONFIG_FILE && !key.startsWith(SYS_PREFIX) && !key.startsWith(TRASH_PREFIX);
 }
 
+// 按字符数截断，且不把代理对（emoji 等）从中间切开 —— 切开会变成孤立代理，
+// 落盘后就成了 U+FFFD，反而制造乱码。
+function clampText(value, max) {
+    const s = String(value === null || value === undefined ? '' : value);
+    if (s.length <= max) return s;
+    let cut = max;
+    const code = s.charCodeAt(cut - 1);
+    if (code >= 0xD800 && code <= 0xDBFF) cut -= 1;
+    return s.slice(0, cut);
+}
+
+// 从 R2 键名还原发件人与主题。
+//
+// v2（当前）：<时间戳>_<发件人长度>_<发件人><主题>.eml
+//   用「长度前缀」而不是分隔符定位，所以发件人 / 主题里出现 "_" 也不会解析错位。
+//   发件人与主题在入库时就已经解码成明文，这里直接用，不再二次解码。
+//
+// v1（历史数据）：<时间戳>_<发件人>_<主题>.eml
+//   只能尽力还原；主题若含 "_" 或当年被 sanitize 破坏过，就还原不回来了。
+function parseKeyMeta(displayKey) {
+    const m = /^(\d+)_(\d+)_/.exec(displayKey);
+    if (m) {
+        const fromLen = parseInt(m[2], 10);
+        const body = displayKey.slice(m[0].length);
+        if (fromLen >= 0 && fromLen <= body.length) {
+            return {
+                from: body.slice(0, fromLen),
+                subject: body.slice(fromLen).replace(/\.eml$/i, '')
+            };
+        }
+    }
+
+    const parts = displayKey.split('_');
+    const fromRaw = parts.length > 1 ? parts[1] : '';
+    let subjectRaw = parts.length > 2 ? parts.slice(2).join('_').replace(/\.eml$/i, '') : displayKey;
+    try { subjectRaw = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch (e) {}
+    return { from: decodeHeaderValue(fromRaw), subject: decodeHeaderValue(subjectRaw) };
+}
+
 // decodeURIComponent 遇到畸形百分号编码会抛 URIError，包一层避免整个请求 500。
 function safeDecode(value) {
     try { return decodeURIComponent(String(value || '')); } catch (e) { return ''; }
@@ -653,12 +692,18 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
 
         // 邮件行点击改用事件委托：原来把键名拼进 onclick 的单引号字符串里，
         // 而 encodeURIComponent 并不转义单引号，主题里带单引号就能闭合字符串注入脚本。
+        //
+        // ⚠️ 这里绝不能用「祖先里有 form 就跳过」来判断交互控件：
+        //    邮件行本身就位于 <form id="batch-form"> 内部，closest('form') 永远命中，
+        //    结果就是整行点击被吞掉、邮件永远打不开。
+        //    必须先把 target 归到行上，再判断它是不是行内真正的控件。
         document.addEventListener('click', function (e) {
             const t = e.target;
             if (!t || typeof t.closest !== 'function') return;
-            if (t.closest('a, button, input, label, form, iframe')) return;
             const row = t.closest('.email-row');
-            if (row && row.dataset.key) window.location.href = '/email/' + row.dataset.key;
+            if (!row || !row.dataset.key) return;
+            if (t.closest('a, button, input, label, select, textarea, iframe')) return;
+            window.location.href = '/email/' + row.dataset.key;
         });
 
         // 危险操作二次确认：第一次点击只「上膛」，4 秒内再点一次才真正提交。
@@ -713,7 +758,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
 
 const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="current-password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
 
-const renderSetup = (error = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>系统初始化</title><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-600 to-blue-700"><div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden"><div class="p-8"><h1 class="text-3xl font-bold text-gray-900 mb-2">欢迎使用</h1><p class="text-gray-500 mb-8">请设置管理员账号以完成首次部署。</p>${error ? `<div class="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl">⚠️ ${escapeHtml(error)}</div>` : ''}<form method="POST" action="/setup" class="space-y-6"><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置用户名</label><input type="text" name="username" autocomplete="username" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="admin" required></div><div><label class="block text-sm font-semibold text-gray-700 mb-2">设置密码</label><input type="password" name="password" autocomplete="new-password" minlength="8" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all" placeholder="至少 8 位" required></div><button class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg hover:shadow-xl active:scale-[0.98]">完成设置并登录</button></form></div></div></body></html>`;
+const renderSetup = (error = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>系统初始化</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleSetup(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 创建中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='完成设置并登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎使用</h1><p class="text-sm text-gray-500 mt-2">首次部署，请设置管理员账号</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" action="/setup" class="space-y-5" onsubmit="return handleSetup(document.getElementById('setupBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">管理员用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">管理员密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="new-password" minlength="8" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="至少 8 位" required></div><p class="text-xs text-gray-400 ml-1">密码至少 8 位，创建后即可登录</p></div><button type="submit" id="setupBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">完成设置并登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
 
 // ==========================================
 // 4. 业务逻辑与路由
@@ -1342,14 +1387,11 @@ async function handleRequest(request, env, ctx) {
             const fullKey = e.key;
             const displayKey = isTrashPage ? e.key.replace(TRASH_PREFIX, '') : e.key;
 
-            const parts = displayKey.split('_');
-            const senderRaw = parts.length > 1 ? parts[1] : '未知发件人';
-            const senderName = decodeHeaderValue(senderRaw.includes('<') ? senderRaw.split('<')[0].replace(/"/g, '').trim() : senderRaw) || '未知发件人';
-
-            const subjectRaw = parts.length > 2 ? parts.slice(2).join('_').replace(/\.eml$/i, '') : displayKey;
-            let subject = subjectRaw;
-            try { subject = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch (e) {}
-            subject = decodeHeaderValue(subject) || '(无主题)';
+            const meta = parseKeyMeta(displayKey);
+            const senderName = (meta.from.includes('<')
+                ? meta.from.split('<')[0].replace(/"/g, '').trim()
+                : meta.from.trim()) || '未知发件人';
+            const subject = meta.subject.trim() || '(无主题)';
 
             const color = getAvatarColor(senderName);
             const ts = keyTimestamp(displayKey);
@@ -1427,11 +1469,26 @@ export default {
             return;
         }
 
-        const subject = message.headers.get('subject') || 'No_Subject';
-        const from = message.from || 'Unknown';
-        // 键名里的非法字符必须清掉，否则会破坏列表页对「时间戳_发件人_主题」的解析
-        const safeSubject = subject.replace(/[\/\\:*?"<>|\r\n]/g, '_').trim().slice(0, 60) || 'No_Subject';
-        const key = Date.now() + '_' + from + '_' + safeSubject + '.eml';
+        // 【关键修复】在「入库时」就把 RFC2047 编码的主题/发件人解码成明文。
+        //
+        // 旧版本是把原始头部直接写进键名、再由列表页解码。但键名会被 sanitize 掉 "?"，
+        // 于是 =?UTF-8?B?xxxx?= 被破坏成 =_UTF-8_B_xxxx_=，编码标记没了、永远解不回来
+        // —— 这就是「有些邮件主题乱码」的根因（只有非 ASCII 主题会中招）。
+        const subject = clampText(
+            decodeHeaderValue(message.headers.get('subject') || 'No_Subject').replace(/[\r\n]+/g, ' ').trim(),
+            120
+        ) || 'No_Subject';
+        const from = clampText(
+            decodeHeaderValue(message.from || 'Unknown').replace(/[\r\n]+/g, ' ').trim(),
+            120
+        ) || 'Unknown';
+
+        // 键名格式 v2：<时间戳>_<发件人长度>_<发件人><主题>.eml
+        // "/" 仍然要换成 "-"：它会被 encodeURIComponent 转成 %2F 放进 URL 路径，
+        // 万一被中间层还原就会把 /email/<key> 的路径切坏。
+        const keyFrom = from.replace(/[\/\\]/g, '-');
+        const keySubject = subject.replace(/[\/\\]/g, '-');
+        const key = Date.now() + '_' + keyFrom.length + '_' + keyFrom + keySubject + '.eml';
 
         try {
             const rawData = await new Response(message.raw).arrayBuffer();
