@@ -1195,14 +1195,21 @@ function safeDownloadMime(mime) {
 }
 
 // 纵深防御：正文已在不透明源 iframe 里，这里再剥掉脚本与内联事件处理器。
+//
+// 返回 { html, removed } —— removed 表示这份正文里**确实**含有可执行内容。
+// 详情页靠它决定要不要给用户一行说明：99% 的正常邮件这里是 false，页面上不会多出任何文字。
+// 与其在每封邮件下面常驻一句「已剥离脚本」（用户看一百遍也毫无信息量），
+// 不如只在真的剥过东西时才解释一句「这封邮件为什么看着不太一样」。
 function stripActiveContent(html) {
-    return String(html || '')
+    const raw = String(html || '');
+    const cleaned = raw
         .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
         .replace(/<script\b[^>]*\/?>/gi, '')
         .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
         .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
         .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
         .replace(/(href|src)\s*=\s*(["'])\s*javascript:/gi, '$1=$2blocked:');
+    return { html: cleaned, removed: cleaned !== raw };
 }
 
 // ⚠️ 高度上报的取值对象必须是「内容容器」而不是 documentElement，理由见 FRAME_HEIGHT_SCRIPT。
@@ -1239,7 +1246,7 @@ const FRAME_HEIGHT_SCRIPT = '(function(){'
 function buildFrameDocument(email) {
     let inner;
     if (email.html) {
-        inner = stripActiveContent(email.html);
+        inner = stripActiveContent(email.html).html;
     } else if (email.text && email.text.trim()) {
         inner = '<pre class="plain">' + escapeHtml(email.text) + '</pre>';
     } else {
@@ -1269,6 +1276,13 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
         ? ''
         : uploadedAt.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const encodedKey = encodeURIComponent(key);
+
+    // 只有正文里**确实**含有可执行内容（脚本 / 内联事件 / javascript: URL）时才提示一句。
+    // 普通邮件不留任何多余文字 —— 常驻一句「已剥离脚本」对 99% 的邮件毫无信息量，
+    // 而且「已被剥离」的措辞容易被读成「邮件坏了」。这里只在真的发生过剥离时解释一句。
+    const strippedNotice = (email.html && stripActiveContent(email.html).removed)
+        ? `<p class="mt-3 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">这封邮件含有脚本或内联事件，已为安全起见移除；正文其余内容不受影响。</p>`
+        : '';
 
     let attachmentsHtml = '';
     if (email.attachments.length > 0) {
@@ -1333,7 +1347,7 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 <div id="translate-status" class="hidden"></div>
                 <div id="mail-original">
                     <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
-                    <p class="mt-3 text-xs text-gray-400">正文在沙箱中隔离渲染，邮件自带脚本与内联事件已被剥离。</p>
+                    ${strippedNotice}
                 </div>
                 <div id="mail-translated" class="hidden">
                     <div id="translate-body" class="text-[15px] leading-relaxed text-gray-800 whitespace-pre-wrap break-words select-text bg-indigo-50/40 border border-indigo-100 rounded-xl p-4 sm:p-5"></div>
