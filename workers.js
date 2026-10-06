@@ -14,6 +14,9 @@ const TRASH_PREFIX = 'trash/';
 // 内部系统键前缀。登录限流计数等放在这里，永远不会出现在邮件列表里。
 const SYS_PREFIX = '_sys/';
 
+// 应用内设置（转发邮箱、Turnstile 密钥）。放在 _sys/ 前缀下，天然不会出现在邮件列表里。
+const SETTINGS_FILE = SYS_PREFIX + 'settings.json';
+
 // 会话有效期（服务端校验，Cookie 的 Max-Age 只是客户端约束）
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -493,7 +496,8 @@ const Icons = {
     spinner: `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`,
     alert: `<svg class="w-10 h-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>`,
     read: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" /></svg>`,
-    unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`
+    unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`,
+    gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`
 };
 
 const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
@@ -656,6 +660,22 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
             const row = t.closest('.email-row');
             if (row && row.dataset.key) window.location.href = '/email/' + row.dataset.key;
         });
+
+        // 危险操作二次确认：第一次点击只「上膛」，4 秒内再点一次才真正提交。
+        // 比原生 confirm() 更贴合页面风格，也不会被浏览器拦截。
+        function askClear(btn) {
+            if (btn.dataset.armed === '1') return true;
+            btn.dataset.armed = '1';
+            const original = btn.textContent;
+            btn.textContent = '再点一次确认清空';
+            btn.classList.add('bg-red-600', 'text-white');
+            setTimeout(function () {
+                btn.dataset.armed = '';
+                btn.textContent = original;
+                btn.classList.remove('bg-red-600', 'text-white');
+            }, 4000);
+            return false;
+        }
     </script>
 </head>
 <body class="bg-gray-50 fixed inset-0 flex overflow-hidden text-gray-800 w-full">
@@ -684,6 +704,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0) => `
         <nav class="flex-1 p-4 space-y-1 overflow-y-auto">
             <a href="/" class="sidebar-link ${activePage === 'inbox' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'inbox' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.inbox}</span>收件箱</a>
             <a href="/trash" class="sidebar-link ${activePage === 'trash' ? 'active bg-red-50 text-red-700' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'trash' ? 'text-red-600' : 'text-gray-400 group-hover:text-red-500'}">${Icons.trash}</span>已删除</a>
+            <a href="/settings" class="sidebar-link ${activePage === 'settings' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'settings' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.gear}</span>设置</a>
         </nav>
         <div class="p-4 border-t border-gray-100 safe-bottom"><a href="/logout" class="flex items-center px-3 py-3 text-base font-medium text-red-600 rounded-xl hover:bg-red-50 transition-colors"><span class="mr-3">${Icons.logout}</span>退出登录</a></div>
     </aside>
@@ -742,6 +763,155 @@ async function noteLoginFailure(env, ip) {
 
 async function clearLoginFailures(env, ip) {
     try { await env.MAIL_BUCKET.delete(loginFailKey(ip)); } catch (e) {}
+}
+
+// ---------- 应用内设置 ----------
+// 目的：部署后完全不用再打开 Cloudflare 控制台配变量。
+// 取值优先级是「应用内设置 → 环境变量 → 关闭」，三段式回退保证已经配过环境变量的
+// 老部署不会因为这次改动而突然失效。
+
+async function getSettings(env) {
+    try {
+        const obj = await env.MAIL_BUCKET.get(SETTINGS_FILE);
+        if (obj) {
+            const data = await obj.json();
+            if (data && typeof data === 'object') return data;
+        }
+    } catch (e) {}
+    return {};
+}
+
+async function putSettings(env, next) {
+    await env.MAIL_BUCKET.put(SETTINGS_FILE, JSON.stringify(next), {
+        httpMetadata: { contentType: 'application/json' }
+    });
+}
+
+function cleanStr(value) {
+    return String(value === null || value === undefined ? '' : value).trim();
+}
+
+// Turnstile：必须来自同一来源的成对 Key 才启用，半配置一律视为关闭。
+// 这样「只填了 Site Key」不会把管理员锁在登录页外。
+function resolveTurnstile(settings, env) {
+    const site = cleanStr(settings.turnstileSiteKey);
+    const secret = cleanStr(settings.turnstileSecretKey);
+    if (site && secret) return { enabled: true, siteKey: site, secretKey: secret, source: 'settings' };
+
+    const envSite = cleanStr(env.TURNSTILE_SITE_KEY);
+    const envSecret = cleanStr(env.TURNSTILE_SECRET_KEY);
+    if (envSite && envSecret) return { enabled: true, siteKey: envSite, secretKey: envSecret, source: 'env' };
+
+    return { enabled: false, siteKey: '', secretKey: '', source: 'none' };
+}
+
+function resolveForwardEmail(settings, env) {
+    const fromSettings = cleanStr(settings.forwardEmail);
+    if (fromSettings) return { value: fromSettings, source: 'settings' };
+    const fromEnv = cleanStr(env.FORWARD_EMAIL);
+    if (fromEnv) return { value: fromEnv, source: 'env' };
+    return { value: '', source: 'none' };
+}
+
+// 密钥永不回显：只返回掩码和「是否已配置」。
+function maskSecret(value) {
+    const v = cleanStr(value);
+    if (!v) return '';
+    if (v.length <= 12) return '••••••••';
+    return v.slice(0, 6) + '••••••••' + v.slice(-4);
+}
+
+const SOURCE_TEXT = { settings: '应用内已配置', env: '来自环境变量', none: '未配置' };
+
+function sourceBadge(source) {
+    const styles = {
+        settings: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        env: 'bg-blue-50 text-blue-700 border-blue-200',
+        none: 'bg-gray-100 text-gray-500 border-gray-200'
+    };
+    const cls = styles[source] || styles.none;
+    const text = SOURCE_TEXT[source] || SOURCE_TEXT.none;
+    return '<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-xs font-medium ' + cls + '">' + text + '</span>';
+}
+
+function renderSettings(settings, turnstile, forward, opts) {
+    const o = opts || {};
+    const secretMask = maskSecret(settings.turnstileSecretKey);
+    const secretPlaceholder = secretMask
+        ? '已配置：' + secretMask + '（留空则保持不变）'
+        : '0x4AAAAAAAxxxxxxxxxxxxxxxx';
+
+    let alertHtml = '';
+    if (o.error) {
+        alertHtml = '<div class="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl">' + escapeHtml(o.error) + '</div>';
+    } else if (o.notice) {
+        alertHtml = '<div class="mb-6 p-4 bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm rounded-xl">' + escapeHtml(o.notice) + '</div>';
+    }
+
+    const turnstileState = turnstile.enabled
+        ? '<span class="text-emerald-700 font-medium">已启用</span>，登录页会显示人机验证'
+        : '<span class="text-gray-500 font-medium">未启用</span>，登录页会跳过人机验证';
+
+    return `
+    <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
+        <div class="flex items-center px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm">
+            <a href="/" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a>
+            <h1 class="text-lg sm:text-xl font-bold text-gray-800 ml-1">设置</h1>
+        </div>
+        <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar">
+            <div class="p-4 sm:p-8 max-w-3xl mx-auto safe-bottom space-y-6">
+                ${alertHtml}
+                <p class="text-sm text-gray-500 leading-relaxed">
+                    配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。
+                    这里的配置<b class="text-gray-700">优先于</b> Dashboard 上配置的同名环境变量。
+                </p>
+
+                <form method="POST" action="/settings" class="space-y-6">
+                    <section class="border border-gray-200 rounded-xl p-5">
+                        <div class="flex items-center justify-between mb-1">
+                            <h2 class="font-semibold text-gray-900">邮件转发</h2>
+                            ${sourceBadge(forward.source)}
+                        </div>
+                        <p class="text-xs text-gray-500 mb-3">邮件存入 R2 成功后，自动转发一份到这个邮箱。留空表示不转发。</p>
+                        <input type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com"
+                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                    </section>
+
+                    <section class="border border-gray-200 rounded-xl p-5">
+                        <div class="flex items-center justify-between mb-1">
+                            <h2 class="font-semibold text-gray-900">人机验证 · Cloudflare Turnstile</h2>
+                            ${sourceBadge(turnstile.source)}
+                        </div>
+                        <p class="text-xs text-gray-500 mb-4">当前状态：${turnstileState}。<br>两个 Key 必须<b>成对填写</b>；只填一个不会生效，也不会把你自己锁在门外。</p>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Site Key</label>
+                        <input type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx"
+                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all mb-4">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Secret Key</label>
+                        <input type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}"
+                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                        <p class="text-xs text-gray-400 mt-2">Secret Key 只保存在 R2，不会回显。留空表示保持原值不变。</p>
+                    </section>
+
+                    <div class="flex items-center gap-3">
+                        <button type="submit" class="px-5 py-3 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 active:scale-[0.98] transition-all">保存设置</button>
+                        <a href="/settings" class="px-5 py-3 text-gray-600 font-medium rounded-xl hover:bg-gray-100 transition-colors">放弃修改</a>
+                    </div>
+                </form>
+
+                <section class="border border-red-100 bg-red-50/40 rounded-xl p-5">
+                    <h2 class="font-semibold text-gray-900 mb-1">危险操作</h2>
+                    <p class="text-xs text-gray-500 mb-3">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
+                    <form method="POST" action="/settings/clear-turnstile">
+                        <button type="submit" onclick="return askClear(this)" class="px-4 py-2.5 bg-white border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors active:scale-[0.98]">清空 Turnstile 密钥</button>
+                    </form>
+                </section>
+
+                <p class="text-xs text-gray-400 leading-relaxed">
+                    提示：Turnstile 的 Site Key 是服务端渲染进登录页的，保存后<b>下次打开登录页</b>生效。
+                </p>
+            </div>
+        </div>
+    </div>`;
 }
 
 // ---------- 邮件正文沙箱文档 ----------
@@ -916,7 +1086,10 @@ async function handleRequest(request, env, ctx) {
     }
 
     if (url.pathname === '/login') {
-        const siteKey = env.TURNSTILE_SITE_KEY || '';
+        // 三段式回退：应用内设置 → 环境变量 → 关闭
+        const settings = await getSettings(env);
+        const turnstile = resolveTurnstile(settings, env);
+        const siteKey = turnstile.enabled ? turnstile.siteKey : '';
         const ip = clientIp(request);
 
         if (method === 'POST') {
@@ -928,9 +1101,9 @@ async function handleRequest(request, env, ctx) {
             }
 
             const fd = await request.formData();
-            if (siteKey && env.TURNSTILE_SECRET_KEY) {
+            if (turnstile.enabled) {
                 const token = fd.get('cf-turnstile-response');
-                const passed = await verifyTurnstile(token, env.TURNSTILE_SECRET_KEY, ip);
+                const passed = await verifyTurnstile(token, turnstile.secretKey, ip);
                 if (!passed) return htmlResponse(renderLogin('验证码校验失败，请重试', siteKey));
             }
 
@@ -983,6 +1156,61 @@ async function handleRequest(request, env, ctx) {
             if (ts > latest) latest = ts;
         }
         return jsonResponse({ latest: latest });
+    }
+
+    // ---------- 应用内设置页 ----------
+    if (url.pathname === '/settings') {
+        const settings = await getSettings(env);
+
+        if (method === 'POST') {
+            const fd = await request.formData();
+            const next = Object.assign({}, settings);
+
+            // 非密钥字段：页面会回显当前值，所以「空串」就是「清空」
+            next.forwardEmail = cleanStr(fd.get('forward_email'));
+            next.turnstileSiteKey = cleanStr(fd.get('turnstile_site_key'));
+
+            // Secret Key：页面永远不回显明文，所以「空串」只能理解为「不修改」。
+            // 想清空请走下方的「危险操作」按钮。
+            const submittedSecret = cleanStr(fd.get('turnstile_secret_key'));
+            if (submittedSecret) next.turnstileSecretKey = submittedSecret;
+
+            // 成对校验：只填一个 Key 属于半配置，会让用户以为配好了、实际验证永远过不去
+            const hasSite = !!cleanStr(next.turnstileSiteKey);
+            const hasSecret = !!cleanStr(next.turnstileSecretKey);
+            if (hasSite !== hasSecret) {
+                return htmlResponse(renderLayout(
+                    renderSettings(
+                        { forwardEmail: next.forwardEmail, turnstileSiteKey: next.turnstileSiteKey, turnstileSecretKey: settings.turnstileSecretKey },
+                        resolveTurnstile(settings, env),
+                        resolveForwardEmail(settings, env),
+                        { error: 'Turnstile 的 Site Key 与 Secret Key 必须成对填写：要么都填，要么都不填。' }
+                    ),
+                    'settings'
+                ), 400);
+            }
+
+            await putSettings(env, next);
+            return Response.redirect(url.origin + '/settings?saved=1', 302);
+        }
+
+        const notice = url.searchParams.get('saved')
+            ? '设置已保存。'
+            : (url.searchParams.get('cleared') ? 'Turnstile 密钥已清空。' : '');
+
+        return htmlResponse(renderLayout(
+            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice }),
+            'settings'
+        ));
+    }
+
+    if (url.pathname === '/settings/clear-turnstile' && method === 'POST') {
+        const settings = await getSettings(env);
+        const next = Object.assign({}, settings);
+        delete next.turnstileSiteKey;
+        delete next.turnstileSecretKey;
+        await putSettings(env, next);
+        return Response.redirect(url.origin + '/settings?cleared=1', 302);
     }
 
     if (url.pathname === '/delete' && method === 'POST') {
@@ -1165,7 +1393,7 @@ async function handleRequest(request, env, ctx) {
             <div class="h-14 sm:h-16 px-3 sm:px-6 border-b border-gray-100 flex items-center justify-between bg-white shrink-0 z-20 sticky top-0 shadow-sm">
                 <div class="flex items-center w-full">
                      <div class="mr-3 sm:mr-4 flex items-center"><button onclick="toggleMenu()" class="md:hidden mr-3 text-gray-500 p-1 -ml-2 rounded-full hover:bg-gray-100 active:scale-95">${Icons.menu}</button><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" onclick="toggleAll(this)" class="hidden"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
-                    <div id="default-header" class="flex items-center justify-between w-full"><h1 class="text-lg sm:text-xl font-bold text-gray-800">${isTrashPage ? '回收站' : '收件箱'}</h1><button onclick="window.location.reload()" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="刷新">${Icons.refresh}</button></div>
+                    <div id="default-header" class="flex items-center justify-between w-full"><h1 class="text-lg sm:text-xl font-bold text-gray-800">${isTrashPage ? '回收站' : '收件箱'}</h1><div class="flex items-center gap-1"><a href="/settings" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="设置">${Icons.gear}</a><button onclick="window.location.reload()" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="刷新">${Icons.refresh}</button></div></div>
                     <div id="action-header" class="hidden flex items-center justify-between w-full"><span class="text-sm text-gray-600 font-medium whitespace-nowrap mr-2">已选 <span id="selected-count" class="text-indigo-600 font-bold">0</span></span><div class="flex items-center">${batchButtons}</div></div>
                 </div>
             </div>
@@ -1214,13 +1442,13 @@ export default {
             return;
         }
 
-        // 邮件已入库，转发失败不应影响主流程
-        if (env.FORWARD_EMAIL) {
-            try {
-                await message.forward(env.FORWARD_EMAIL);
-            } catch (e) {
-                console.error('Forward failed:', e && e.stack ? e.stack : e);
-            }
+        // 邮件已入库，转发失败不应影响主流程。
+        // 转发地址同样走「应用内设置 → 环境变量」回退，所以设置页改完即刻生效。
+        try {
+            const forward = resolveForwardEmail(await getSettings(env), env);
+            if (forward.value) await message.forward(forward.value);
+        } catch (e) {
+            console.error('Forward failed:', e && e.stack ? e.stack : e);
         }
     }
 };
