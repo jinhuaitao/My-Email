@@ -2282,6 +2282,17 @@ function renderSettings(settings, turnstile, forward, opts) {
                         </form>
                     </section>
 
+                    <section class="card">
+                        <div class="card-head">
+                            <h2>退出登录</h2>
+                            <span class="badge">仅本机</span>
+                        </div>
+                        <p class="card-desc">退出当前设备上的登录，其它设备的登录状态不受影响。</p>
+                        <div>
+                            <a href="/logout" class="btn danger-soft">${Icons.logout}<span>退出登录</span></a>
+                        </div>
+                    </section>
+
                     <p class="hint">Turnstile 的 Site Key 由服务端渲染进登录页，保存后<b>下次打开登录页</b>生效。</p>
                 </div>
             </div>
