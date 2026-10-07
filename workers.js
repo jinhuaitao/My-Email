@@ -1225,6 +1225,10 @@ body{font-family:'Inter',system-ui,-apple-system,'PingFang SC','Hiragino Sans GB
 .input{width:100%;background:var(--surface-2);border:1.5px solid var(--border);color:var(--text-1);border-radius:12px;padding:.72rem 1rem;font-size:.9rem;outline:none;transition:border-color .16s,box-shadow .16s,background .16s}
 .input:focus{background:var(--surface);border-color:var(--brand);box-shadow:0 0 0 4px rgba(79,70,229,.13)}
 .input::placeholder{color:var(--text-3)}
+select.input{appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:2.5rem;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239aa1b8' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right .9rem center;background-size:1rem}
+select.input:focus{background-color:var(--surface)}
 .field-label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:.45rem}
 
 /* ---------- 卡片 / 面板 ---------- */
@@ -1319,9 +1323,27 @@ html.dark .toast{background:#e9edf9;color:#141926}
 /* ---------- 统计卡片 ---------- */
 .stat{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:1.05rem 1.15rem;display:flex;align-items:center;gap:.9rem;box-shadow:var(--shadow);transition:transform .15s}
 .stat:hover{transform:translateY(-2px)}
+a.stat{cursor:pointer;text-decoration:none}
+a.stat:hover{border-color:var(--brand);box-shadow:var(--shadow-lg)}
+a.stat:active{transform:translateY(0)}
 .stat-ic{width:2.7rem;height:2.7rem;border-radius:.9rem;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .stat-num{font-size:1.35rem;font-weight:800;letter-spacing:-.02em;color:var(--text-1);line-height:1.2}
 .stat-lbl{font-size:.75rem;color:var(--text-2);font-weight:500}
+
+/* ---------- 开关（checkbox 美化） ---------- */
+.switch{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0;vertical-align:middle}
+.switch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1}
+.switch .tr{position:absolute;inset:0;border-radius:999px;background:var(--border-strong);transition:background .18s}
+.switch .th{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:transform .18s}
+.switch input:checked~.tr{background:var(--brand-600)}
+.switch input:checked~.th{transform:translateX(18px)}
+.switch input:focus-visible~.tr{outline:2px solid var(--brand);outline-offset:2px}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.85rem 0}
+.switch-row+.switch-row{border-top:1px solid var(--border)}
+
+/* ---------- 设置区块操作行 ---------- */
+.panel-actions{display:flex;align-items:center;gap:.75rem;margin-top:1.1rem;flex-wrap:wrap}
+.panel-actions .spacer{flex:1}
 
 /* ---------- 附件 ---------- */
 .att{display:flex;align-items:center;gap:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:.8rem .9rem;transition:all .15s}
@@ -1969,6 +1991,8 @@ function sourceBadge(source) {
 }
 
 // ---------- 设置 ----------
+// v2.3：区块结构统一为 section.panel + 内部独立表单 + panel-actions 操作行；
+// 统计卡片可点击跳转；新增「显示与阅读」区块。
 // opts = { error, notice, stats: { total, unread, starred, trash } }
 
 function renderSettings(settings, turnstile, forward, opts) {
@@ -1995,11 +2019,16 @@ function renderSettings(settings, turnstile, forward, opts) {
             <input type="password" name="${name}" autocomplete="${autocomplete}" required ${extra || ''} class="input !pr-11">
             <button type="button" onclick="togglePw(this)" class="absolute inset-y-0 right-0 pr-3.5 flex items-center" style="color:var(--text-3)" aria-label="显示密码" tabindex="-1">${Icons.eye}</button>
         </div>`;
-    const statCard = (icon, bg, color, num, label) => `
-        <div class="stat">
+    const statCard = (href, icon, bg, color, num, label) => `
+        <a class="stat" href="${href}">
             <div class="stat-ic" style="background:${bg};color:${color}">${icon}</div>
             <div><div class="stat-num">${num}</div><div class="stat-lbl">${label}</div></div>
-        </div>`;
+        </a>`;
+
+    // 每页数量：只在设置里改默认值，列表页 ?limit= 显式指定时优先
+    const pageSize = parseInt(settings.pageSize, 10) || 50;
+    const pageOpt = (v) => `<option value="${v}"${pageSize === v ? ' selected' : ''}>${v} 封 / 页</option>`;
+    const autoMark = settings.autoMarkRead !== false;
 
     return `
     <div class="view fade-in">
@@ -2012,22 +2041,24 @@ function renderSettings(settings, turnstile, forward, opts) {
                 ${alertHtml}
 
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-                    ${statCard(Icons.inbox, 'var(--brand-50)', 'var(--brand-700)', stats.total || 0, '收件箱邮件')}
-                    ${statCard(Icons.unread, 'var(--info-bg)', 'var(--info-text)', stats.unread || 0, '未读')}
-                    ${statCard(Icons.star, 'var(--warning-bg)', 'var(--warning)', stats.starred || 0, '已加星标')}
-                    ${statCard(Icons.trash, 'var(--danger-bg)', 'var(--danger)', stats.trash || 0, '回收站')}
+                    ${statCard('/', Icons.inbox, 'var(--brand-50)', 'var(--brand-700)', stats.total || 0, '收件箱邮件')}
+                    ${statCard('/?unread=1', Icons.unread, 'var(--info-bg)', 'var(--info-text)', stats.unread || 0, '未读')}
+                    ${statCard('/starred', Icons.star, 'var(--warning-bg)', 'var(--warning)', stats.starred || 0, '已加星标')}
+                    ${statCard('/trash', Icons.trash, 'var(--danger-bg)', 'var(--danger)', stats.trash || 0, '回收站')}
                 </div>
 
-                <p class="panel-desc mb-6">配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。这里的配置<b style="color:var(--text-1)">优先于</b> Dashboard 上配置的同名环境变量。</p>
+                <p class="panel-desc mb-6">配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。这里的配置<b style="color:var(--text-1)">优先于</b> Dashboard 上配置的同名环境变量。点上面的统计卡片可直接跳到对应视图。</p>
 
-                <form method="POST" action="/settings" class="space-y-5">
+                <div class="space-y-5">
                     <section class="panel">
-                        <div class="flex items-center justify-between gap-3 mb-1 flex-wrap">
-                            <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.send}</span>邮件转发</h2>
-                            ${sourceBadge(forward.source)}
-                        </div>
-                        <p class="panel-desc mb-4">邮件存入 R2 成功后，自动转发一份到这个邮箱。留空表示不转发。</p>
-                        <input type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com" class="input">
+                        <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.send}</span>邮件转发${sourceBadge(forward.source)}</h2>
+                        <p class="panel-desc mt-1 mb-4">邮件存入 R2 成功后，自动转发一份到这个邮箱。留空表示不转发。</p>
+                        <form method="POST" action="/settings">
+                            <input type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com" class="input">
+                            <div class="panel-actions">
+                                <button type="submit" class="btn btn-primary">保存转发设置</button>
+                            </div>
+                        </form>
                     </section>
 
                     <section class="panel">
@@ -2036,46 +2067,77 @@ function renderSettings(settings, turnstile, forward, opts) {
                             ${sourceBadge(turnstile.source)}
                         </div>
                         <div class="flex items-center gap-2 my-3 flex-wrap">${turnstileState}</div>
-                        <p class="panel-desc mb-4">两个 Key 必须<b style="color:var(--text-1)">成对填写</b>；只填一个不会生效，也不会把你自己锁在门外。</p>
-                        <label class="field-label">Site Key</label>
-                        <input type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx" class="input mb-4">
-                        <label class="field-label">Secret Key</label>
-                        <input type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}" class="input">
-                        <p class="text-xs mt-2" style="color:var(--text-3)">Secret Key 只保存在 R2，不会回显。留空表示保持原值不变。</p>
+                        <p class="panel-desc mb-4">两个 Key 必须<b style="color:var(--text-1)">成对填写</b>；只填一个不会生效，也不会把你自己锁在门外。Secret Key 只保存在 R2，永不回显。</p>
+                        <form method="POST" action="/settings">
+                            <label class="field-label">Site Key</label>
+                            <input type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx" class="input mb-4">
+                            <label class="field-label">Secret Key</label>
+                            <input type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}" class="input">
+                            <p class="text-xs mt-2" style="color:var(--text-3)">留空表示保持原值不变。</p>
+                            <div class="panel-actions">
+                                <button type="submit" class="btn btn-primary">保存验证设置</button>
+                                <span class="spacer"></span>
+                                <button type="submit" formaction="/settings/clear-turnstile" onclick="return askClear(this)" class="btn btn-danger-soft">清空密钥</button>
+                            </div>
+                        </form>
                     </section>
 
-                    <div class="flex items-center gap-3 flex-wrap">
-                        <button type="submit" class="btn btn-primary">保存设置</button>
-                        <a href="/settings" class="btn btn-ghost">放弃修改</a>
-                    </div>
-                </form>
+                    <section class="panel">
+                        <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.eye}</span>显示与阅读</h2>
+                        <p class="panel-desc mt-1 mb-2">控制列表一次展示多少邮件，以及打开邮件时的已读行为。</p>
+                        <form method="POST" action="/settings">
+                            <label class="field-label">每页显示数量</label>
+                            <select name="page_size" class="input mb-2">
+                                ${pageOpt(25)}${pageOpt(50)}${pageOpt(100)}${pageOpt(200)}
+                            </select>
+                            <p class="text-xs mb-1" style="color:var(--text-3)">列表页用 <span class="kbd">?limit=</span> 显式指定时优先于这里。</p>
+                            <div class="switch-row">
+                                <div>
+                                    <div class="font-semibold text-sm" style="color:var(--text-1)">打开邮件时自动标记已读</div>
+                                    <div class="text-xs mt-0.5" style="color:var(--text-3)">关闭后，未读邮件需要手动标记，已读计数不再自动变化</div>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" name="auto_mark_read" value="1"${autoMark ? ' checked' : ''}>
+                                    <span class="tr"></span><span class="th"></span>
+                                </label>
+                            </div>
+                            <div class="panel-actions">
+                                <button type="submit" class="btn btn-primary">保存显示设置</button>
+                            </div>
+                        </form>
+                    </section>
 
-                <form method="POST" action="/settings/password" class="panel mt-5">
-                    <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.key}</span>修改密码</h2>
-                    <p class="panel-desc mb-4">更新后<b style="color:var(--text-1)">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div><label class="field-label">当前密码</label>${pwInput('current_password', 'current-password')}</div>
-                        <div><label class="field-label">新密码</label>${pwInput('new_password', 'new-password', 'minlength="8" placeholder="至少 8 位"')}</div>
-                        <div><label class="field-label">确认新密码</label>${pwInput('confirm_password', 'new-password', 'minlength="8"')}</div>
-                    </div>
-                    <button type="submit" class="btn btn-dark mt-5">更新密码</button>
-                </form>
+                    <section class="panel">
+                        <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.key}</span>修改密码</h2>
+                        <p class="panel-desc mt-1 mb-4">更新后<b style="color:var(--text-1)">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
+                        <form method="POST" action="/settings/password">
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div><label class="field-label">当前密码</label>${pwInput('current_password', 'current-password')}</div>
+                                <div><label class="field-label">新密码</label>${pwInput('new_password', 'new-password', 'minlength="8" placeholder="至少 8 位"')}</div>
+                                <div><label class="field-label">确认新密码</label>${pwInput('confirm_password', 'new-password', 'minlength="8"')}</div>
+                            </div>
+                            <div class="panel-actions">
+                                <button type="submit" class="btn btn-dark">更新密码</button>
+                            </div>
+                        </form>
+                    </section>
 
-                <section class="panel mt-5" style="border-color:var(--danger-border);background:color-mix(in srgb, var(--danger-bg) 45%, var(--surface))">
-                    <h2 class="panel-title" style="color:var(--danger)"><span>${Icons.alert}</span>危险操作</h2>
-                    <p class="panel-desc mb-4">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
-                    <form method="POST" action="/settings/clear-turnstile">
-                        <button type="submit" onclick="return askClear(this)" class="btn btn-danger-soft">清空 Turnstile 密钥</button>
-                    </form>
-                </section>
+                    <section class="panel" style="border-color:var(--danger-border);background:color-mix(in srgb, var(--danger-bg) 45%, var(--surface))">
+                        <h2 class="panel-title" style="color:var(--danger)"><span>${Icons.alert}</span>安全</h2>
+                        <p class="panel-desc mt-1 mb-4">怀疑账号在别处被登录？一键让<b style="color:var(--text-1)">其它所有设备</b>立即下线，当前设备不受影响。</p>
+                        <form method="POST" action="/settings/logout-others" onsubmit="return confirm('确定要退出其他所有设备上的登录吗？')">
+                            <button type="submit" class="btn btn-danger-soft">退出其他设备</button>
+                        </form>
+                    </section>
 
-                <div class="mt-6 panel !p-4">
-                    <div class="flex items-start gap-3">
-                        <span class="flex-shrink-0 mt-0.5" style="color:var(--text-3)">${Icons.info}</span>
-                        <div class="text-xs leading-relaxed" style="color:var(--text-2)">
-                            <p class="font-bold mb-1" style="color:var(--text-1)">键盘快捷键</p>
-                            <p><span class="kbd">J</span> / <span class="kbd">K</span> 在列表中上下移动　<span class="kbd">X</span> 勾选　<span class="kbd">↵</span> 打开邮件　<span class="kbd">/</span> 聚焦搜索　<span class="kbd">Esc</span> 关闭弹窗</p>
-                            <p class="mt-2">Turnstile 的 Site Key 是服务端渲染进登录页的，保存后<b>下次打开登录页</b>生效。</p>
+                    <div class="panel !p-4">
+                        <div class="flex items-start gap-3">
+                            <span class="flex-shrink-0 mt-0.5" style="color:var(--text-3)">${Icons.info}</span>
+                            <div class="text-xs leading-relaxed" style="color:var(--text-2)">
+                                <p class="font-bold mb-1" style="color:var(--text-1)">使用提示</p>
+                                <p><span class="kbd">J</span> / <span class="kbd">K</span> 在列表中上下移动　<span class="kbd">X</span> 勾选　<span class="kbd">↵</span> 打开邮件　<span class="kbd">/</span> 聚焦搜索　<span class="kbd">Esc</span> 关闭弹窗</p>
+                                <p class="mt-2">Turnstile 的 Site Key 是服务端渲染进登录页的，保存后<b>下次打开登录页</b>生效。</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2946,14 +3008,23 @@ async function handleRequest(request, env, ctx) {
             const fd = await request.formData();
             const next = Object.assign({}, settings);
 
-            // 非密钥字段：页面会回显当前值，所以「空串」就是「清空」
-            next.forwardEmail = cleanStr(fd.get('forward_email'));
-            next.turnstileSiteKey = cleanStr(fd.get('turnstile_site_key'));
+            // v2.3：各设置区块独立表单、独立保存 —— 只更新本次提交的字段，
+            // 没提交的字段保持原值（之前是整表覆盖，分开提交会误清空别的区块）。
+            // 非密钥字段：区块内会回显当前值，所以「空串」就是「清空」。
+            if (fd.has('forward_email')) next.forwardEmail = cleanStr(fd.get('forward_email'));
+            if (fd.has('turnstile_site_key')) next.turnstileSiteKey = cleanStr(fd.get('turnstile_site_key'));
 
             // Secret Key：页面永远不回显明文，所以「空串」只能理解为「不修改」。
-            // 想清空请走下方的「危险操作」按钮。
+            // 想清空请用 Turnstile 区块里的「清空密钥」按钮。
             const submittedSecret = cleanStr(fd.get('turnstile_secret_key'));
             if (submittedSecret) next.turnstileSecretKey = submittedSecret;
+
+            // 显示与阅读：page_size 必提交（select），auto_mark_read 勾选才提交（checkbox）
+            if (fd.has('page_size')) {
+                const ps = parseInt(String(fd.get('page_size')), 10);
+                next.pageSize = Number.isFinite(ps) ? Math.min(Math.max(ps, 10), PAGE_SIZE_MAX) : PAGE_SIZE_DEFAULT;
+                next.autoMarkRead = fd.has('auto_mark_read');
+            }
 
             // 成对校验：只填一个 Key 属于半配置，会让用户以为配好了、实际验证永远过不去
             const hasSite = !!cleanStr(next.turnstileSiteKey);
@@ -2980,7 +3051,9 @@ async function handleRequest(request, env, ctx) {
             ? '设置已保存。'
             : (url.searchParams.get('cleared')
                 ? 'Turnstile 密钥已清空。'
-                : (url.searchParams.get('pwchanged') ? '密码已更新，其它设备上的登录已失效。' : ''));
+                : (url.searchParams.get('pwchanged')
+                    ? '密码已更新，其它设备上的登录已失效。'
+                    : (url.searchParams.get('loggedout') ? '已退出其他设备上的登录，本机不受影响。' : '')));
 
         return htmlResponse(renderLayout(
             renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice, stats: stats }),
@@ -2997,6 +3070,21 @@ async function handleRequest(request, env, ctx) {
         delete next.turnstileSecretKey;
         await putSettings(env, next);
         return Response.redirect(url.origin + '/settings?cleared=1', 302);
+    }
+
+    // ---------- 退出其他设备 ----------
+    // 轮换会话 token：其它设备上的旧 Cookie 立刻失效；当前这台用响应里下发的新 Cookie 续上，无需重新登录。
+    if (url.pathname === '/settings/logout-others' && method === 'POST') {
+        config.sessionToken = randomHex(32);
+        config.sessionExpires = Date.now() + SESSION_TTL_MS;
+        await env.MAIL_BUCKET.put(CONFIG_FILE, JSON.stringify(config), { httpMetadata: { contentType: 'application/json' } });
+        return new Response(null, {
+            status: 302,
+            headers: Object.assign({}, BASE_HEADERS, {
+                'Set-Cookie': SESSION_NAME + '=' + config.sessionToken + '; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
+                'Location': '/settings?loggedout=1'
+            })
+        });
     }
 
     // ---------- 修改密码 ----------
@@ -3290,7 +3378,9 @@ async function handleRequest(request, env, ctx) {
         // 只读一次 body：R2ObjectBody 的流被消费后不能重复读取
         const buffer = await resolved.obj.arrayBuffer();
         const meta0 = resolved.obj.customMetadata || {};
-        const willMarkRead = !resolved.isTrash && meta0.isRead !== 'true';
+        // 「设置 → 显示与阅读」可关闭自动标已读；默认开启（保持原行为）
+        const detailSettings = await getSettings(env);
+        const willMarkRead = detailSettings.autoMarkRead !== false && !resolved.isTrash && meta0.isRead !== 'true';
         if (willMarkRead) {
             // ⚠️ 必须保留已有 customMetadata（isStarred 等），不能只写 isRead ——
             // 否则打开一封星标邮件就会悄悄抹掉它的星标。
@@ -3341,6 +3431,8 @@ async function handleRequest(request, env, ctx) {
 
     const LIST_MODE = url.pathname === '/trash' ? 'trash' : (url.pathname === '/starred' ? 'starred' : (url.pathname === '/' ? 'inbox' : null));
     if (LIST_MODE) {
+        // 显示设置（每页数量）：小 JSON，一次读取；?limit= 显式指定时优先
+        const listSettings = await getSettings(env);
         const isTrashPage = LIST_MODE === 'trash';
         const isStarredPage = LIST_MODE === 'starred';
 
@@ -3377,11 +3469,16 @@ async function handleRequest(request, env, ctx) {
             })
             : emails;
 
-        // 分页：夹在 [50, 2000]，避免 ?limit= 被放大成任意值
+        // 分页：夹在 [50, 2000]，避免 ?limit= 被放大成任意值；
+        // 默认值走「设置 → 显示与阅读」里的每页数量
         const requested = parseInt(url.searchParams.get('limit') || '', 10);
+        const savedPageSize = parseInt(listSettings.pageSize, 10);
+        const defaultPageSize = Number.isFinite(savedPageSize)
+            ? Math.min(Math.max(savedPageSize, 10), PAGE_SIZE_MAX)
+            : PAGE_SIZE_DEFAULT;
         const pageSize = Number.isFinite(requested)
             ? Math.min(Math.max(requested, PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX)
-            : PAGE_SIZE_DEFAULT;
+            : defaultPageSize;
         const shown = matched.slice(0, pageSize);
         const nextSize = Math.min(pageSize * 2, PAGE_SIZE_MAX);
         const hasMore = matched.length > shown.length;
