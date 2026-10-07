@@ -81,8 +81,11 @@ const TRANSLATION_CACHE_PREFIX = SYS_PREFIX + 'trans/';
 
 const renderAppIcon = () => `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="128" fill="#4f46e5"/>
-  <path d="M112 160h288c17.6 0 32 14.4 32 32v192c0 17.6-14.4 32-32 32H112c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32zm20.8 32l106.6 86.6c9.6 7.8 23.6 7.8 33.2 0L379.2 192H132.8z" fill="white"/>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#818cf8"/><stop offset=".55" stop-color="#4f46e5"/><stop offset="1" stop-color="#3730a3"/>
+  </linearGradient></defs>
+  <rect width="512" height="512" rx="128" fill="url(#g)"/>
+  <path d="M112 160h288c17.6 0 32 14.4 32 32v192c0 17.6-14.4 32-32 32H112c-17.6 0-32-14.4-32-32V192c0-17.6 14.4-32 32-32zm20.8 32l106.6 86.6c9.6 7.8 23.6 7.8 33.2 0L379.2 192H132.8z" fill="white" opacity=".96"/>
 </svg>`;
 
 const renderManifest = () => JSON.stringify({
@@ -1098,301 +1101,725 @@ function getAvatarColor(name) {
 // 3. UI 渲染与滚动修复
 // ==========================================
 
+// ---------- 图标库（Heroicons 风格，线性 24px） ----------
+// 所有图标统一 stroke="currentColor"，颜色由父级文字颜色决定，
+// 尺寸由 class 控制（w-4/w-5/w-6），在不同位置复用时保持视觉一致。
+
 const Icons = {
-    inbox: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>`,
-    trash: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>`,
-    refresh: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>`,
-    logout: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>`,
-    back: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>`,
-    attach: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>`,
-    file: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`,
-    download: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>`,
-    menu: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>`,
-    user: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>`,
-    lock: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>`,
-    spinner: `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`,
-    alert: `<svg class="w-10 h-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>`,
-    read: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" /></svg>`,
-    unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`,
-    gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`,
-    translate: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`,
-    search: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" /></svg>`,
-    key: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>`
+    inbox: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>`,
+    star: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" /></svg>`,
+    starFill: `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.007 5.404.433c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.433 2.082-5.006z" clip-rule="evenodd" /></svg>`,
+    trash: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>`,
+    refresh: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>`,
+    logout: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>`,
+    back: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>`,
+    chevL: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>`,
+    chevR: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>`,
+    attach: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>`,
+    file: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>`,
+    download: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>`,
+    menu: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>`,
+    user: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>`,
+    lock: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>`,
+    spinner: `<svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`,
+    alert: `<svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>`,
+    read: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76" /></svg>`,
+    unread: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>`,
+    checkAll: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`,
+    gear: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`,
+    translate: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>`,
+    search: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" /></svg>`,
+    key: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>`,
+    sun: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" /></svg>`,
+    moon: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0012 21.75a9.753 9.753 0 009.752-6.748z" /></svg>`,
+    copy: `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25" /></svg>`,
+    print: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.051 48.051 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659" /></svg>`,
+    code: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" /></svg>`,
+    check: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>`,
+    x: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>`,
+    info: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" /></svg>`,
+    chart: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /></svg>`,
+    send: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>`,
+    shield: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" /></svg>`
 };
 
+
+// ==========================================
+// 3. UI 设计系统 + 全局布局
+// ==========================================
+//
+// 设计语言 v2（"Clarity"）：
+//   - 全站由 CSS 变量驱动配色，深色模式只需翻转变量，无需重写 class；
+//   - 组件类（.btn/.card/.input/.nav-item/.email-row/...）保证所有页面视觉统一；
+//   - Tailwind 只负责布局（flex/grid/间距），颜色语义全部走组件类，
+//     避免"每个页面各自拼一套颜色"导致的不协调。
+
+const THEME_CSS = `
+:root{
+  --brand:#4f46e5; --brand-600:#4338ca; --brand-700:#3730a3;
+  --brand-50:#eef2ff; --brand-100:#e0e7ff;
+  --bg:#f3f4fa; --surface:#ffffff; --surface-2:#f7f8fc;
+  --border:#e7e9f2; --border-strong:#d8dbe8;
+  --text-1:#141926; --text-2:#5b6378; --text-3:#9aa1b8;
+  --danger:#dc2626; --danger-bg:#fef2f2; --danger-border:#fecaca;
+  --success:#059669; --success-bg:#ecfdf5; --success-border:#a7f3d0;
+  --warning:#d97706; --warning-bg:#fffbeb; --warning-border:#fde68a;
+  --info-bg:#eff6ff; --info-border:#bfdbfe; --info-text:#1d4ed8;
+  --star:#f59e0b;
+  --radius:14px;
+  --shadow:0 1px 2px rgba(18,24,48,.05),0 10px 28px -14px rgba(18,24,48,.16);
+  --shadow-lg:0 18px 50px -12px rgba(18,24,48,.28);
+  color-scheme:light;
+}
+html.dark{
+  --brand:#818cf8; --brand-600:#6d7bf5; --brand-700:#a5b4fc;
+  --brand-50:#1d2342; --brand-100:#283058;
+  --bg:#0a0d18; --surface:#11162a; --surface-2:#0d1224;
+  --border:#222948; --border-strong:#303a61;
+  --text-1:#e9edf9; --text-2:#a3abd0; --text-3:#5f688c;
+  --danger:#f87171; --danger-bg:rgba(220,38,38,.13); --danger-border:rgba(220,38,38,.35);
+  --success:#34d399; --success-bg:rgba(5,150,105,.13); --success-border:rgba(5,150,105,.35);
+  --warning:#fbbf24; --warning-bg:rgba(217,119,6,.13); --warning-border:rgba(217,119,6,.35);
+  --info-bg:rgba(59,130,246,.13); --info-border:rgba(59,130,246,.35); --info-text:#93c5fd;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -14px rgba(0,0,0,.55);
+  --shadow-lg:0 18px 50px -12px rgba(0,0,0,.6);
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{font-family:'Inter',system-ui,-apple-system,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;-webkit-tap-highlight-color:transparent;background:var(--bg);color:var(--text-1)}
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:8px;border:3px solid transparent;background-clip:content-box}
+*::-webkit-scrollbar-thumb:hover{background:var(--text-3);border:3px solid transparent;background-clip:content-box}
+*::-webkit-scrollbar-track{background:transparent}
+*{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
+
+/* ---------- 按钮 ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;font-weight:600;font-size:.875rem;line-height:1.25;padding:.65rem 1.15rem;border-radius:12px;border:1px solid transparent;cursor:pointer;transition:all .16s ease;white-space:nowrap;user-select:none}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.55;cursor:not-allowed;transform:none}
+.btn-primary{background:linear-gradient(135deg,var(--brand),var(--brand-600));color:#fff;box-shadow:0 8px 18px -8px rgba(79,70,229,.55)}
+.btn-primary:hover{filter:brightness(1.07)}
+.btn-soft{background:var(--brand-50);color:var(--brand-700)}
+.btn-soft:hover{background:var(--brand-100)}
+.btn-ghost{background:transparent;color:var(--text-2)}
+.btn-ghost:hover{background:var(--surface-2);color:var(--text-1)}
+.btn-danger{background:var(--danger);color:#fff;box-shadow:0 8px 18px -8px rgba(220,38,38,.5)}
+.btn-danger:hover{filter:brightness(1.06)}
+.btn-danger-soft{background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger-border)}
+.btn-danger-soft:hover{filter:brightness(.98)}
+.btn-success-soft{background:var(--success-bg);color:var(--success);border:1px solid var(--success-border)}
+.btn-outline{background:var(--surface);border-color:var(--border-strong);color:var(--text-1)}
+.btn-outline:hover{border-color:var(--brand);color:var(--brand-700)}
+.btn-dark{background:#171c30;color:#fff}
+.btn-dark:hover{background:#232a48}
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;min-width:2.5rem;height:2.5rem;padding:0 .5rem;border-radius:12px;color:var(--text-3);cursor:pointer;transition:all .15s;border:1px solid transparent;background:transparent}
+.icon-btn:hover{background:var(--surface-2);color:var(--brand-700)}
+.icon-btn:active{transform:scale(.94)}
+.icon-btn.danger:hover{background:var(--danger-bg);color:var(--danger)}
+.icon-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
+
+/* ---------- 输入框 ---------- */
+.input{width:100%;background:var(--surface-2);border:1.5px solid var(--border);color:var(--text-1);border-radius:12px;padding:.72rem 1rem;font-size:.9rem;outline:none;transition:border-color .16s,box-shadow .16s,background .16s}
+.input:focus{background:var(--surface);border-color:var(--brand);box-shadow:0 0 0 4px rgba(79,70,229,.13)}
+.input::placeholder{color:var(--text-3)}
+.field-label{display:block;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:.45rem}
+
+/* ---------- 卡片 / 面板 ---------- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow)}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:1.35rem;box-shadow:var(--shadow)}
+.panel-title{font-size:1rem;font-weight:700;color:var(--text-1);display:flex;align-items:center;gap:.6rem}
+.panel-desc{font-size:.8rem;color:var(--text-2);margin-top:.3rem;line-height:1.6}
+
+/* ---------- 提示条 ---------- */
+.alert{display:flex;gap:.7rem;align-items:flex-start;padding:.9rem 1.1rem;border-radius:14px;font-size:.875rem;line-height:1.6;border:1px solid}
+.alert-error{background:var(--danger-bg);border-color:var(--danger-border);color:var(--danger)}
+.alert-ok{background:var(--success-bg);border-color:var(--success-border);color:var(--success)}
+.alert-info{background:var(--info-bg);border-color:var(--info-border);color:var(--info-text)}
+
+/* ---------- 徽标 / 标签 ---------- */
+.nbadge{min-width:1.5rem;height:1.5rem;padding:0 .45rem;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);font-size:.72rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;margin-left:auto;flex-shrink:0}
+.nbadge.hot{background:var(--brand);border-color:var(--brand);color:#fff}
+.chip{display:inline-flex;align-items:center;gap:.35rem;padding:.28rem .7rem;border-radius:999px;font-size:.75rem;font-weight:600;border:1px solid}
+.chip-green{background:var(--success-bg);border-color:var(--success-border);color:var(--success)}
+.chip-blue{background:var(--info-bg);border-color:var(--info-border);color:var(--info-text)}
+.chip-gray{background:var(--surface-2);border-color:var(--border);color:var(--text-2)}
+.chip-amber{background:var(--warning-bg);border-color:var(--warning-border);color:var(--warning)}
+
+/* ---------- 应用骨架 ---------- */
+.app-shell{display:flex;height:100dvh;overflow:hidden;background:var(--bg)}
+.sidebar{width:250px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:50}
+.brand{display:flex;align-items:center;gap:.75rem;padding:1.15rem 1.25rem;border-bottom:1px solid var(--border);height:4.5rem;flex-shrink:0}
+.brand-logo{width:2.4rem;height:2.4rem;border-radius:.8rem;background:linear-gradient(135deg,#6366f1,#4f46e5 60%,#3730a3);display:flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 6px 14px -4px rgba(79,70,229,.55);flex-shrink:0}
+.brand-name{font-size:1.12rem;font-weight:800;letter-spacing:-.02em;color:var(--text-1)}
+.brand-name small{display:block;font-size:.62rem;font-weight:600;letter-spacing:.14em;color:var(--text-3);text-transform:uppercase}
+.side-nav{flex:1;overflow-y:auto;padding:.9rem .8rem;display:flex;flex-direction:column;gap:.25rem}
+.nav-item{display:flex;align-items:center;gap:.8rem;padding:.68rem .9rem;border-radius:12px;font-weight:500;font-size:.92rem;color:var(--text-2);transition:all .14s;cursor:pointer}
+.nav-item:hover{background:var(--surface-2);color:var(--text-1)}
+.nav-item.active{background:var(--brand-50);color:var(--brand-700);font-weight:700}
+.nav-item.active.trashy{background:var(--danger-bg);color:var(--danger)}
+.nav-item svg{flex-shrink:0}
+.side-foot{padding:.8rem;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:.25rem}
+.main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;position:relative}
+
+/* ---------- 视图（列表/详情/设置共用） ---------- */
+.view{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--surface);overflow:hidden}
+@media(min-width:768px){.view{margin:.9rem;border-radius:20px;border:1px solid var(--border);box-shadow:var(--shadow)}}
+.view-head{display:flex;align-items:center;gap:.4rem;padding:.65rem .9rem;border-bottom:1px solid var(--border);background:var(--surface);z-index:20;flex-shrink:0}
+.view-title{font-size:1.08rem;font-weight:800;letter-spacing:-.01em;color:var(--text-1)}
+.view-sub{font-size:.78rem;color:var(--text-3)}
+.view-body{flex:1;overflow-y:auto;min-height:0;overscroll-behavior:contain}
+.view-divider{height:1px;background:var(--border);flex-shrink:0}
+
+/* ---------- 邮件行 ---------- */
+.email-row{display:block;background:var(--surface);border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;position:relative;user-select:none}
+.email-row:hover{background:var(--surface-2)}
+.email-row.selected{background:var(--brand-50)}
+.email-row.kb-focus{box-shadow:inset 3px 0 0 var(--brand)}
+.unread-dot{width:8px;height:8px;background:var(--brand);border-radius:50%;display:inline-block;margin-right:.45rem;flex-shrink:0;box-shadow:0 0 0 3px var(--brand-50)}
+.star-btn{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:9px;color:var(--text-3);cursor:pointer;transition:all .14s;background:transparent;border:none;flex-shrink:0}
+.star-btn:hover{background:var(--surface-2);color:var(--star);transform:scale(1.12)}
+.star-btn.on{color:var(--star)}
+.star-btn.on:hover{transform:scale(1.12)}
+.avatar{border-radius:999px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;flex-shrink:0;letter-spacing:.02em}
+
+/* ---------- 复选框 ---------- */
+.cbx{position:relative;display:inline-flex;cursor:pointer}
+.cbx input{position:absolute;opacity:0;width:0;height:0}
+.cbx .box{width:1.25rem;height:1.25rem;border-radius:.45rem;border:2px solid var(--border-strong);background:var(--surface);display:flex;align-items:center;justify-content:center;transition:all .14s;color:#fff}
+.cbx .box svg{width:.8rem;height:.8rem;display:none}
+.cbx input:checked + .box{background:var(--brand);border-color:var(--brand)}
+.cbx input:checked + .box svg{display:block}
+.cbx:hover .box{border-color:var(--brand)}
+
+/* ---------- 空状态 ---------- */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4rem 1.5rem}
+.empty-icon{width:4.2rem;height:4.2rem;border-radius:1.4rem;background:var(--surface-2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-3);margin-bottom:1.1rem}
+.empty h3{font-size:1.05rem;font-weight:700;color:var(--text-1);margin-bottom:.35rem}
+.empty p{font-size:.85rem;color:var(--text-2);max-width:22rem;line-height:1.7}
+
+/* ---------- Toast ---------- */
+#toast-wrap{position:fixed;bottom:1.4rem;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:.5rem;align-items:center;pointer-events:none;width:max-content;max-width:92vw}
+.toast{display:flex;align-items:center;gap:.6rem;background:#1c2133;color:#f2f4fb;padding:.75rem 1.15rem;border-radius:14px;font-size:.87rem;font-weight:500;box-shadow:var(--shadow-lg);opacity:0;transform:translateY(12px) scale(.96);transition:all .28s cubic-bezier(.16,1,.3,1);max-width:92vw}
+html.dark .toast{background:#e9edf9;color:#141926}
+.toast.show{opacity:1;transform:translateY(0) scale(1)}
+.toast .t-dot{width:.55rem;height:.55rem;border-radius:99px;background:var(--brand);flex-shrink:0}
+.toast-success .t-dot{background:var(--success)}
+.toast-error .t-dot{background:var(--danger)}
+
+/* ---------- 弹窗 ---------- */
+.modal-backdrop{position:fixed;inset:0;z-index:150;background:rgba(15,18,35,.45);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:1rem;opacity:0;pointer-events:none;transition:opacity .18s}
+.modal-backdrop.open{opacity:1;pointer-events:auto}
+.modal-panel{background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:var(--shadow-lg);width:100%;max-width:24rem;padding:1.6rem;transform:scale(.94) translateY(8px);transition:transform .22s cubic-bezier(.16,1,.3,1)}
+.modal-backdrop.open .modal-panel{transform:scale(1) translateY(0)}
+.modal-icon{width:3rem;height:3rem;border-radius:1rem;display:flex;align-items:center;justify-content:center;margin:0 auto 1rem}
+
+/* ---------- 统计卡片 ---------- */
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:1.05rem 1.15rem;display:flex;align-items:center;gap:.9rem;box-shadow:var(--shadow);transition:transform .15s}
+.stat:hover{transform:translateY(-2px)}
+.stat-ic{width:2.7rem;height:2.7rem;border-radius:.9rem;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.stat-num{font-size:1.35rem;font-weight:800;letter-spacing:-.02em;color:var(--text-1);line-height:1.2}
+.stat-lbl{font-size:.75rem;color:var(--text-2);font-weight:500}
+
+/* ---------- 附件 ---------- */
+.att{display:flex;align-items:center;gap:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:.8rem .9rem;transition:all .15s}
+.att:hover{border-color:var(--brand);box-shadow:var(--shadow)}
+.att-ic{width:2.5rem;height:2.5rem;border-radius:.8rem;background:var(--brand-50);color:var(--brand-700);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+/* ---------- 详情页头部信息 ---------- */
+.kv{display:grid;grid-template-columns:auto 1fr;gap:.3rem .9rem;font-size:.83rem}
+.kv dt{color:var(--text-3);font-weight:600;white-space:nowrap}
+.kv dd{color:var(--text-1);word-break:break-all;user-select:text}
+
+/* ---------- 快捷键 ---------- */
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:1.6rem;height:1.6rem;padding:0 .4rem;border-radius:.45rem;background:var(--surface-2);border:1px solid var(--border-strong);border-bottom-width:2px;font-size:.72rem;font-weight:700;color:var(--text-2);font-family:inherit}
+
+/* ---------- 登录页 ---------- */
+.auth-bg{min-height:100dvh;display:flex;background:var(--bg)}
+.auth-side{flex:1;display:none;position:relative;overflow:hidden;background:linear-gradient(140deg,#312e81 0%,#4f46e5 45%,#6d28d9 100%)}
+@media(min-width:1024px){.auth-side{display:flex;flex-direction:column;justify-content:space-between;padding:3rem;color:#fff}}
+.auth-orb{position:absolute;border-radius:50%;filter:blur(90px);opacity:.5;pointer-events:none}
+.auth-form-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:1.5rem;min-width:0}
+.auth-card{width:100%;max-width:26rem}
+.feat{display:flex;gap:.9rem;align-items:flex-start}
+.feat-ic{width:2.6rem;height:2.6rem;border-radius:.9rem;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;flex-shrink:0;backdrop-filter:blur(4px)}
+
+.safe-bottom{padding-bottom:env(safe-area-inset-bottom)}
+.fade-in{animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+`;
+
+const THEME_BOOT_SCRIPT = `(function(){try{var t=localStorage.getItem('cfmail-theme');if(t==='dark'){document.documentElement.classList.add('dark');}}catch(e){}})();`;
+
+// 全局前端脚本：时间渲染、新邮件轮询、弹窗、批量操作、星标、
+// iframe 高度自适应、行点击委托、主题、Toast、键盘快捷键。
+// 注意：正文 iframe 高度必须「原样采用、绝不加固定增量」，
+// 否则会形成"视口变高 → 测得更高 → iframe 再变高"的正反馈
+// （详见原实现注释，实测 4 秒能涨 1700px）。
+const GLOBAL_SCRIPT = `
+(function(){
+'use strict';
+var ICON_STAR = '${'<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" /></svg>'}';
+var ICON_STAR_FILL = '${'<svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.007 5.404.433c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.433 2.082-5.006z" clip-rule="evenodd" /></svg>'}';
+
+/* ---------- 主题 ---------- */
+function currentTheme(){ try{ return localStorage.getItem('cfmail-theme') || 'light'; }catch(e){ return 'light'; } }
+function syncThemeIcon(){
+  var dark = document.documentElement.classList.contains('dark');
+  var a = document.getElementById('theme-ic-light'), b = document.getElementById('theme-ic-dark');
+  if(a) a.style.display = dark ? 'none' : '';
+  if(b) b.style.display = dark ? '' : 'none';
+}
+window.toggleTheme = function(){
+  var dark = !document.documentElement.classList.contains('dark');
+  document.documentElement.classList.toggle('dark', dark);
+  try{ localStorage.setItem('cfmail-theme', dark ? 'dark' : 'light'); }catch(e){}
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute('content', dark ? '#0a0d18' : '#4f46e5');
+  syncThemeIcon();
+};
+syncThemeIcon();
+
+/* ---------- Toast ---------- */
+window.toast = function(msg, kind){
+  var wrap = document.getElementById('toast-wrap');
+  if(!wrap) return;
+  var t = document.createElement('div');
+  t.className = 'toast' + (kind === 'success' ? ' toast-success' : kind === 'error' ? ' toast-error' : '');
+  var dot = document.createElement('span'); dot.className = 't-dot';
+  var txt = document.createElement('span'); txt.textContent = msg;
+  t.appendChild(dot); t.appendChild(txt);
+  wrap.appendChild(t);
+  requestAnimationFrame(function(){ t.classList.add('show'); });
+  setTimeout(function(){ t.classList.remove('show'); setTimeout(function(){ t.remove(); }, 320); }, 3400);
+  while(wrap.children.length > 3) wrap.removeChild(wrap.firstChild);
+};
+// 服务端经 ?toast= 参数传递一次性通知（批量操作后跳转时用）
+(function(){
+  try{
+    var u = new URL(window.location.href);
+    var msg = u.searchParams.get('toast');
+    if(msg){
+      u.searchParams.delete('toast');
+      window.history.replaceState(null, '', u.pathname + (u.search ? '?' + u.searchParams.toString() : '') + u.hash);
+      // 注意：URLSearchParams.get() 已经做过一次解码，这里不能再 decodeURIComponent，
+      // 否则消息里带 %（如主题里的 50%）会抛 URIError。
+      setTimeout(function(){ window.toast(msg, 'success'); }, 250);
+    }
+  }catch(e){}
+})();
+
+/* ---------- 时间（服务端只给时间戳，浏览器按本地时区渲染） ---------- */
+function formatTs(ts, full){
+  var d = new Date(ts), now = new Date();
+  var pad = function(n){ return String(n).padStart(2, '0'); };
+  var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+  if(full) return d.getFullYear() + '年' + (d.getMonth()+1) + '月' + d.getDate() + '日 ' + hm;
+  if(d.toDateString() === now.toDateString()) return hm;
+  if(d.getFullYear() === now.getFullYear()) return (d.getMonth()+1) + '月' + d.getDate() + '日';
+  return d.getFullYear() + '年' + (d.getMonth()+1) + '月' + d.getDate() + '日';
+}
+function hydrateTimes(){
+  var nodes = document.querySelectorAll('time[data-ts]');
+  for(var i=0;i<nodes.length;i++){
+    var el = nodes[i], ts = parseInt(el.getAttribute('data-ts'), 10);
+    if(ts > 0) el.textContent = formatTs(ts, el.getAttribute('data-fmt') === 'full');
+  }
+}
+document.addEventListener('DOMContentLoaded', hydrateTimes);
+
+/* ---------- 新邮件轮询（仅收件箱首页） ---------- */
+if(window.location.pathname === '/' && window.CURRENT_PAGE_LATEST_TS > 0){
+  setInterval(function(){
+    fetch('/api/check').then(function(r){ return r.ok ? r.json() : null; }).then(function(data){
+      if(data && data.latest > window.CURRENT_PAGE_LATEST_TS){
+        toast('收到新邮件，正在刷新…');
+        setTimeout(function(){ window.location.reload(); }, 1400);
+      }
+    }).catch(function(){});
+  }, 15000);
+}
+
+/* ---------- 弹窗 ---------- */
+window._confirmCallback = null;
+window.showModal = function(title, msg, callback, isDestructive){
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-msg').textContent = msg;
+  var ic = document.getElementById('modal-icon');
+  ic.className = 'modal-icon ' + (isDestructive ? '' : '');
+  ic.style.background = isDestructive ? 'var(--danger-bg)' : 'var(--brand-50)';
+  ic.style.color = isDestructive ? 'var(--danger)' : 'var(--brand-700)';
+  var btn = document.getElementById('modal-confirm-btn');
+  btn.className = 'btn flex-1 ' + (isDestructive ? 'btn-danger' : 'btn-primary');
+  var bd = document.getElementById('modal-backdrop');
+  bd.classList.add('open');
+  window._confirmCallback = callback;
+};
+window.hideModal = function(){
+  document.getElementById('modal-backdrop').classList.remove('open');
+  window._confirmCallback = null;
+};
+window.onModalConfirm = function(){ if(window._confirmCallback) window._confirmCallback(); hideModal(); };
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape') hideModal(); });
+
+window.confirmBatch = function(action){
+  var map = { 'delete':'移入回收站', 'purge':'彻底删除', 'restore':'恢复', 'mark_read':'标记为已读', 'mark_unread':'标记为未读', 'star':'加星标', 'unstar':'取消星标' };
+  var isDestructive = action === 'delete' || action === 'purge';
+  if(action === 'mark_read' || action === 'mark_unread' || action === 'star' || action === 'unstar'){ submitBatchForm(action); return; }
+  var label = map[action] || '执行操作';
+  showModal(label, '确定要将选中的邮件' + label + '吗？' + (action === 'purge' ? '此操作不可恢复。' : '此操作可撤销。'), function(){ submitBatchForm(action); }, isDestructive);
+};
+window.submitBatchForm = function(action){
+  var form = document.getElementById('batch-form');
+  var input = document.createElement('input');
+  input.type = 'hidden'; input.name = 'action'; input.value = action;
+  form.appendChild(input); form.submit();
+};
+window.confirmSingle = function(event, msg, isDestructive){
+  event.preventDefault();
+  var form = event.target;
+  showModal('确认操作', msg, function(){ form.submit(); }, !!isDestructive);
+  return false;
+};
+// 危险操作二次确认：第一次点击只"上膛"，4 秒内再点一次才真正提交
+window.askClear = function(btn){
+  if(btn.dataset.armed === '1') return true;
+  btn.dataset.armed = '1';
+  var original = btn.innerHTML;
+  btn.innerHTML = '再点一次确认清空';
+  btn.classList.add('btn-danger');
+  setTimeout(function(){ btn.dataset.armed = ''; btn.innerHTML = original; btn.classList.remove('btn-danger'); }, 4000);
+  return false;
+};
+
+/* ---------- 批量选择 ---------- */
+window.toggleAll = function(source){
+  var boxes = document.querySelectorAll('#mail-list input[name="keys"]');
+  for(var i=0;i<boxes.length;i++){ boxes[i].checked = source.checked; paintRow(boxes[i]); }
+  updateToolbar();
+};
+function paintRow(checkbox){
+  var row = checkbox.closest('.email-row');
+  if(row) row.classList.toggle('selected', checkbox.checked);
+}
+window.updateRowStyle = function(checkbox){ paintRow(checkbox); updateToolbar(); };
+window.updateToolbar = function(){
+  var count = document.querySelectorAll('#mail-list input[name="keys"]:checked').length;
+  var actionHeader = document.getElementById('action-header');
+  var defaultHeader = document.getElementById('default-header');
+  if(actionHeader && defaultHeader){
+    actionHeader.classList.toggle('hidden', count === 0);
+    defaultHeader.classList.toggle('hidden', count > 0);
+    var sc = document.getElementById('selected-count');
+    if(sc) sc.textContent = count;
+  }
+};
+
+/* ---------- 星标（无刷新切换；键名从行 data-key 读取，绝不拼进 JS 字符串） ---------- */
+window.setStarUI = function(btn, on){
+  btn.classList.toggle('on', !!on);
+  btn.innerHTML = on ? ICON_STAR_FILL : ICON_STAR;
+  btn.setAttribute('title', on ? '取消星标' : '加星标');
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+};
+window.toggleStar = function(btn){
+  if(btn.disabled) return false;
+  var row = btn.closest ? btn.closest('.email-row') : null;
+  var key = row && row.dataset.key ? decodeURIComponent(row.dataset.key) : '';
+  if(!key) return false;
+  var on = btn.classList.contains('on');
+  btn.disabled = true;
+  fetch('/api/flag', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ key:key, star:!on }) })
+    .then(function(r){ return r.json().catch(function(){ return null; }); })
+    .then(function(d){
+      if(d && d.ok){ setStarUI(btn, d.star); toast(d.star ? '已加星标' : '已取消星标', 'success'); syncStarBadge(d.starCount); }
+      else toast((d && d.error) || '操作失败，请重试', 'error');
+    })
+    .catch(function(){ toast('网络错误，请稍后重试', 'error'); })
+    .then(function(){ btn.disabled = false; });
+  return false;
+};
+function syncStarBadge(n){
+  var b = document.getElementById('nav-star-badge');
+  if(!b) return;
+  if(n > 0){ b.style.display = ''; b.textContent = n > 999 ? '999+' : n; }
+  else b.style.display = 'none';
+}
+
+/* ---------- 复制 ---------- */
+window.copyText = function(text, msg){
+  function done(){ toast(msg || '已复制到剪贴板', 'success'); }
+  function fallback(){
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); done(); }catch(e){ toast('复制失败', 'error'); }
+    ta.remove();
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done, fallback); }
+  else fallback();
+};
+
+/* ---------- 移动端侧栏 ---------- */
+window.toggleMenu = function(){
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('mobile-backdrop');
+  var closed = sidebar.classList.contains('-translate-x-full');
+  if(closed){ sidebar.classList.remove('-translate-x-full'); backdrop.classList.remove('hidden'); document.body.style.overflow = 'hidden'; }
+  else { sidebar.classList.add('-translate-x-full'); backdrop.classList.add('hidden'); document.body.style.overflow = ''; }
+};
+
+/* ---------- 邮件行点击（事件委托，防 XSS 注入） ----------
+   键名绝不拼进 onclick 字符串（encodeURIComponent 不转义单引号），
+   而是用 data-key + 委托。行内真正的控件（a/button/input/label）优先。 */
+document.addEventListener('click', function(e){
+  var t = e.target;
+  if(!t || typeof t.closest !== 'function') return;
+  var row = t.closest('.email-row');
+  if(!row || !row.dataset.key) return;
+  if(t.closest('a, button, input, label, select, textarea, iframe')) return;
+  window.location.href = '/email/' + row.dataset.key;
+});
+
+/* ---------- 正文 iframe 高度自适应 ---------- */
+var appliedHeight = -1, lastStep = 0, sameStep = 0;
+window.addEventListener('resize', function(){ lastStep = 0; sameStep = 0; });
+window.addEventListener('message', function(e){
+  var d = e.data;
+  if(!d || typeof d.__cfmailHeight !== 'number') return;
+  var frame = document.getElementById('mail-frame');
+  if(!frame || e.source !== frame.contentWindow) return;
+  var h = Math.min(Math.max(Math.ceil(d.__cfmailHeight), 120), 20000);
+  if(h === appliedHeight) return;
+  var step = appliedHeight > 0 ? h - appliedHeight : 0;
+  if(step > 0 && step <= 64 && step === lastStep){ if(++sameStep >= 3) return; }
+  else sameStep = 0;
+  lastStep = step; appliedHeight = h;
+  frame.style.height = h + 'px';
+});
+
+/* ---------- 列表键盘快捷键 ---------- */
+(function(){
+  var list = document.getElementById('mail-list');
+  if(!list) return;
+  var idx = -1;
+  function rows(){ return Array.prototype.slice.call(list.querySelectorAll('.email-row')); }
+  function focus(i){
+    var rs = rows();
+    if(!rs.length) return;
+    idx = Math.max(0, Math.min(i, rs.length - 1));
+    rs.forEach(function(r){ r.classList.remove('kb-focus'); });
+    var r = rs[idx];
+    r.classList.add('kb-focus');
+    r.scrollIntoView({ block:'nearest', behavior:'smooth' });
+  }
+  document.addEventListener('keydown', function(e){
+    if(e.metaKey || e.ctrlKey || e.altKey) return;
+    var tag = (document.activeElement && document.activeElement.tagName) || '';
+    if(/INPUT|TEXTAREA|SELECT/.test(tag)) return;
+    var k = e.key;
+    if(k === 'j' || k === 'ArrowDown'){ e.preventDefault(); focus(idx + 1); }
+    else if(k === 'k' || k === 'ArrowUp'){ e.preventDefault(); focus(idx < 0 ? 0 : idx - 1); }
+    else if(k === 'x'){
+      var rs = rows();
+      if(idx >= 0 && rs[idx]){ var cb = rs[idx].querySelector('input[name="keys"]'); if(cb){ cb.checked = !cb.checked; paintRow(cb); updateToolbar(); } }
+    }
+    else if(k === 'Enter'){
+      var rs2 = rows();
+      if(idx >= 0 && rs2[idx] && rs2[idx].dataset.key) window.location.href = '/email/' + rs2[idx].dataset.key;
+    }
+    else if(k === '/'){ var s = document.getElementById('list-search'); if(s){ e.preventDefault(); s.focus(); } }
+  });
+})();
+})();
+`;
+
+// ---------- 全局布局 ----------
+// activePage: inbox | starred | trash | settings
+// opts: { unreadCount, starCount, trashCount }
+
 const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0, opts = {}) => {
-    const unreadCount = Number(opts.unreadCount) || 0;
-    const unreadBadge = unreadCount > 0
-        ? `<span class="ml-auto min-w-[1.5rem] h-6 px-2 flex items-center justify-center rounded-full bg-indigo-600 text-white text-xs font-semibold">${unreadCount > 999 ? '999+' : unreadCount}</span>`
-        : '';
-    return `
-<!DOCTYPE html>
+    const num = v => { const n = Number(v) || 0; return n > 999 ? '999+' : String(n); };
+    const badge = (n, hot, id) => n > 0
+        ? `<span class="nbadge${hot ? ' hot' : ''}"${id ? ` id="${id}"` : ''}>${num(n)}</span>`
+        : `<span class="nbadge" style="display:none"${id ? ` id="${id}"` : ''}>0</span>`;
+    const unread = Number(opts.unreadCount) || 0;
+    const starred = Number(opts.starCount) || 0;
+    const trashed = Number(opts.trashCount) || 0;
+
+    const navItem = (page, href, icon, label, badgeHtml, trashy) => `
+        <a href="${href}" class="nav-item${activePage === page ? ' active' : ''}${trashy && activePage === page ? ' trashy' : ''}">
+            ${icon}<span>${label}</span>${badgeHtml}
+        </a>`;
+
+    const logoSvg = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" /></svg>`;
+
+    return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Cloudflare Mail</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>CF Mail · Cloudflare 邮箱</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#4f46e5">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="icon" type="image/svg+xml" href="/logo.svg">
     <link rel="apple-touch-icon" href="/logo.svg">
+    <script>${THEME_BOOT_SCRIPT}</script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        body { font-family: 'Inter', system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
-        .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .email-body img { max-width: 100%; height: auto; }
-        .email-body blockquote { border-left: 3px solid #e5e7eb; padding-left: 0.8rem; color: #6b7280; }
-        .custom-checkbox input:checked + div { background-color: #4f46e5; border-color: #4f46e5; }
-        .custom-checkbox input:checked + div svg { display: block; }
-        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
-        .mobile-sidebar-backdrop { background-color: rgba(0,0,0,0.5); }
-        .modal-enter { opacity: 0; transform: scale(0.95); }
-        .modal-enter-active { opacity: 1; transform: scale(1); transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
-        .modal-leave { opacity: 1; transform: scale(1); }
-        .modal-leave-active { opacity: 0; transform: scale(0.95); transition: all 0.15s ease-in; }
-        .unread-dot { width: 8px; height: 8px; background-color: #4f46e5; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
-        .sidebar-link { transition: all 0.15s ease-in-out; }
-        .sidebar-link.active { background-color: #eef2ff; color: #4f46e5; font-weight: 600; }
-        .sidebar-link:hover:not(.active) { background-color: #f8f9fa; }
-    </style>
-    <script>
-        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js').catch(() => {}); }
-
-        // 时间一律在客户端按**用户本地时区**格式化。
-        // 不能在 Worker 里用 toLocaleDateString —— Workers 运行时是 UTC，
-        // 中国用户看到的日期会整整差 8 小时（早上 7 点收到的邮件会显示成前一天）。
-        function formatTs(ts, full) {
-            const d = new Date(ts);
-            const now = new Date();
-            const pad = n => String(n).padStart(2, '0');
-            const hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
-            if (full) return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hm;
-            if (d.toDateString() === now.toDateString()) return hm;
-            if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + '月' + d.getDate() + '日';
-            return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
-        }
-        function hydrateTimes() {
-            const nodes = document.querySelectorAll('time[data-ts]');
-            for (const el of nodes) {
-                const ts = parseInt(el.getAttribute('data-ts'), 10);
-                if (ts > 0) el.textContent = formatTs(ts, el.getAttribute('data-fmt') === 'full');
-            }
-        }
-        document.addEventListener('DOMContentLoaded', hydrateTimes);
-
-        const CURRENT_PAGE_LATEST_TS = ${latestTimestamp};
-        if (window.location.pathname === '/' && CURRENT_PAGE_LATEST_TS > 0) {
-            setInterval(async () => {
-                try {
-                    const res = await fetch('/api/check');
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.latest > CURRENT_PAGE_LATEST_TS) {
-                            const toast = document.createElement('div');
-                            toast.className = 'fixed bottom-4 left-1/2 -translate-x-1/2 p-3 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-600/50 z-[70] transition-opacity duration-300';
-                            toast.textContent = '检测到新邮件，正在刷新...';
-                            document.body.appendChild(toast);
-                            setTimeout(() => { window.location.reload(); }, 1500);
-                        }
-                    }
-                } catch(e) {}
-            }, 15000); 
-        }
-
-        window._confirmCallback = null;
-        function showModal(title, msg, callback, isDestructive = false) {
-            document.getElementById('modal-title').textContent = title;
-            document.getElementById('modal-msg').textContent = msg;
-            const btn = document.getElementById('modal-confirm-btn');
-            if (isDestructive) {
-                btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700', 'shadow-indigo-600/30');
-                btn.classList.add('bg-red-600', 'hover:bg-red-700', 'shadow-red-600/30');
-            } else {
-                btn.classList.remove('bg-red-600', 'hover:bg-red-700', 'shadow-red-600/30');
-                btn.classList.add('bg-indigo-600', 'hover:bg-indigo-700', 'shadow-indigo-600/30');
-            }
-            const backdrop = document.getElementById('modal-backdrop');
-            const panel = document.getElementById('modal-panel');
-            backdrop.classList.remove('hidden');
-            void backdrop.offsetWidth;
-            backdrop.classList.remove('opacity-0');
-            panel.classList.remove('opacity-0', 'scale-95');
-            window._confirmCallback = callback;
-        }
-        function hideModal() {
-            const backdrop = document.getElementById('modal-backdrop');
-            const panel = document.getElementById('modal-panel');
-            backdrop.classList.add('opacity-0');
-            panel.classList.add('opacity-0', 'scale-95');
-            setTimeout(() => { backdrop.classList.add('hidden'); }, 200);
-            window._confirmCallback = null;
-        }
-        function onModalConfirm() { if (window._confirmCallback) window._confirmCallback(); hideModal(); }
-        function confirmBatch(action) {
-            const map = { 'delete': '移入回收站', 'purge': '彻底删除', 'restore': '恢复', 'mark_read': '标记为已读', 'mark_unread': '标记为未读' };
-            const isDestructive = action === 'delete' || action === 'purge';
-            if (action === 'mark_read' || action === 'mark_unread') { submitBatchForm(action); return; }
-            const msg = \`确定要将选中的邮件\${map[action]}吗？此操作\${action === 'purge' ? '不可恢复' : '可撤销'}。\`;
-            showModal(map[action], msg, () => { submitBatchForm(action); }, isDestructive);
-        }
-        function submitBatchForm(action) {
-            const form = document.getElementById('batch-form');
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'action';
-            input.value = action;
-            form.appendChild(input);
-            form.submit();
-        }
-        function confirmSingle(event, msg, isDestructive) {
-            event.preventDefault();
-            const form = event.target;
-            showModal('确认操作', msg, () => { form.submit(); }, isDestructive);
-            return false;
-        }
-        function toggleAll(source) {
-            const checkboxes = document.querySelectorAll('input[name="keys"]');
-            checkboxes.forEach(cb => { cb.checked = source.checked; updateRowStyle(cb); });
-            updateToolbar();
-        }
-        function updateRowStyle(checkbox) {
-            const row = checkbox.closest('.email-row');
-            checkbox.checked ? row.classList.add('bg-indigo-50') : row.classList.remove('bg-indigo-50');
-            updateToolbar();
-        }
-        function updateToolbar() {
-            const count = document.querySelectorAll('input[name="keys"]:checked').length;
-            const actionHeader = document.getElementById('action-header');
-            const defaultHeader = document.getElementById('default-header');
-            if (actionHeader && defaultHeader) {
-                actionHeader.classList.toggle('hidden', count === 0);
-                defaultHeader.classList.toggle('hidden', count > 0);
-                document.getElementById('selected-count').textContent = count;
-            }
-        }
-        function toggleMenu() {
-            const sidebar = document.getElementById('mobile-sidebar');
-            const backdrop = document.getElementById('mobile-backdrop');
-            const isClosed = sidebar.classList.contains('-translate-x-full');
-            if (isClosed) {
-                sidebar.classList.remove('-translate-x-full');
-                backdrop.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            } else {
-                sidebar.classList.add('-translate-x-full');
-                backdrop.classList.add('hidden');
-                document.body.style.overflow = '';
-            }
-        }
-
-        // 邮件正文渲染在沙箱 iframe 里，由它 postMessage 回报正文容器高度，父页面据此调整高度。
-        // 校验 e.source === frame.contentWindow，避免页面内其它来源伪造高度。
-        //
-        // ⚠️ 高度必须「原样采用」，绝不能加固定增量。iframe 高度会决定它内部视口的高度，
-        //    而 documentElement.scrollHeight 被视口高度托底 —— 一旦在这里加常数，
-        //    就会形成「视口变高 → 测得更高 → iframe 再变高」的正反馈，
-        //    表现为打开邮件后正文下方无限空白（实测 4 秒能涨 1700px 以上）。
-        //    appliedHeight 做去重，避免同样的高度反复写 style。
-        //
-        // ⚠️ 还有一类内容用上面的办法治不好：正文里带 vh 单位（例如 <div style="min-height:100vh">）。
-        //    vh 天然绑定视口高度，而视口高度正是我们在设的值 —— 这类内容不存在不动点，
-        //    高度会以固定步长匀速爬升。真实内容不会「等幅」增长（图片陆续加载的步长是参差的），
-        //    所以连续 3 次等幅递增就判定为反馈环并停止跟随。窗口尺寸变化时重置判定。
-        let appliedHeight = -1;
-        let lastStep = 0;
-        let sameStep = 0;
-        window.addEventListener('resize', function () { lastStep = 0; sameStep = 0; });
-        window.addEventListener('message', function (e) {
-            const d = e.data;
-            if (!d || typeof d.__cfmailHeight !== 'number') return;
-            const frame = document.getElementById('mail-frame');
-            if (!frame || e.source !== frame.contentWindow) return;
-            const h = Math.min(Math.max(Math.ceil(d.__cfmailHeight), 120), 20000);
-            if (h === appliedHeight) return;
-            const step = appliedHeight > 0 ? h - appliedHeight : 0;
-            if (step > 0 && step <= 64 && step === lastStep) {
-                if (++sameStep >= 3) return;
-            } else {
-                sameStep = 0;
-            }
-            lastStep = step;
-            appliedHeight = h;
-            frame.style.height = h + 'px';
-        });
-
-        // 邮件行点击改用事件委托：原来把键名拼进 onclick 的单引号字符串里，
-        // 而 encodeURIComponent 并不转义单引号，主题里带单引号就能闭合字符串注入脚本。
-        //
-        // ⚠️ 这里绝不能用「祖先里有 form 就跳过」来判断交互控件：
-        //    邮件行本身就位于 <form id="batch-form"> 内部，closest('form') 永远命中，
-        //    结果就是整行点击被吞掉、邮件永远打不开。
-        //    必须先把 target 归到行上，再判断它是不是行内真正的控件。
-        document.addEventListener('click', function (e) {
-            const t = e.target;
-            if (!t || typeof t.closest !== 'function') return;
-            const row = t.closest('.email-row');
-            if (!row || !row.dataset.key) return;
-            if (t.closest('a, button, input, label, select, textarea, iframe')) return;
-            window.location.href = '/email/' + row.dataset.key;
-        });
-
-        // 危险操作二次确认：第一次点击只「上膛」，4 秒内再点一次才真正提交。
-        // 比原生 confirm() 更贴合页面风格，也不会被浏览器拦截。
-        function askClear(btn) {
-            if (btn.dataset.armed === '1') return true;
-            btn.dataset.armed = '1';
-            const original = btn.textContent;
-            btn.textContent = '再点一次确认清空';
-            btn.classList.add('bg-red-600', 'text-white');
-            setTimeout(function () {
-                btn.dataset.armed = '';
-                btn.textContent = original;
-                btn.classList.remove('bg-red-600', 'text-white');
-            }, 4000);
-            return false;
-        }
-    </script>
+    <style>${THEME_CSS}</style>
+    <script>window.CURRENT_PAGE_LATEST_TS = ${Number(latestTimestamp) || 0};</script>
 </head>
-<body class="bg-gray-50 fixed inset-0 flex overflow-hidden text-gray-800 w-full">
-    <div id="modal-backdrop" class="fixed inset-0 z-[60] hidden transition-opacity duration-200 opacity-0">
-        <div class="absolute inset-0 bg-gray-900/40 backdrop-blur-sm" onclick="hideModal()"></div>
-        <div class="flex items-center justify-center min-h-screen p-4">
-            <div id="modal-panel" class="relative bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 transition-all duration-200 transform scale-95 opacity-0">
-                <div class="flex flex-col items-center text-center">
-                    <div class="mb-4 bg-red-50 p-3 rounded-full">${Icons.alert}</div>
-                    <h3 id="modal-title" class="text-lg font-bold text-gray-900 mb-2"></h3>
-                    <p id="modal-msg" class="text-sm text-gray-500 mb-6 leading-relaxed"></p>
-                    <div class="flex space-x-3 w-full">
-                        <button onclick="hideModal()" class="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition-colors">取消</button>
-                        <button id="modal-confirm-btn" onclick="onModalConfirm()" class="flex-1 px-4 py-2.5 bg-indigo-600 text-white font-medium rounded-xl shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 transition-all active:scale-95">确定</button>
-                    </div>
-                </div>
+<body class="app-shell">
+    <div id="toast-wrap" aria-live="polite"></div>
+
+    <div id="modal-backdrop" class="modal-backdrop">
+        <div class="absolute inset-0" onclick="hideModal()"></div>
+        <div class="modal-panel relative">
+            <div id="modal-icon" class="modal-icon">${Icons.alert}</div>
+            <h3 id="modal-title" class="text-lg font-bold text-center mb-2" style="color:var(--text-1)"></h3>
+            <p id="modal-msg" class="text-sm text-center mb-6 leading-relaxed" style="color:var(--text-2)"></p>
+            <div class="flex gap-3">
+                <button onclick="hideModal()" class="btn btn-ghost flex-1" style="border:1px solid var(--border)">取消</button>
+                <button id="modal-confirm-btn" onclick="onModalConfirm()" class="btn btn-primary flex-1">确定</button>
             </div>
         </div>
     </div>
-    <div id="mobile-backdrop" onclick="toggleMenu()" class="fixed inset-0 mobile-sidebar-backdrop z-40 hidden md:hidden transition-opacity"></div>
-    <aside id="mobile-sidebar" class="fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out -translate-x-full md:relative md:translate-x-0 md:flex flex-col h-full shadow-xl md:shadow-none">
-        <div class="p-5 flex items-center justify-between border-b border-gray-100 h-16">
-            <div class="flex items-center space-x-3"><div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">M</div><span class="font-semibold text-xl tracking-tight text-gray-900">CF Mail</span></div>
-            <button onclick="toggleMenu()" class="md:hidden text-gray-500"><svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
+
+    <div id="mobile-backdrop" onclick="toggleMenu()" class="fixed inset-0 z-40 hidden md:hidden" style="background:rgba(10,13,24,.5);backdrop-filter:blur(2px)"></div>
+
+    <aside id="sidebar" class="sidebar fixed inset-y-0 left-0 transform -translate-x-full transition-transform duration-300 md:static md:translate-x-0" style="box-shadow:var(--shadow-lg)">
+        <div class="brand">
+            <div class="brand-logo">${logoSvg}</div>
+            <div class="brand-name">CF Mail<small>Cloudflare Webmail</small></div>
+            <button onclick="toggleMenu()" class="icon-btn md:hidden ml-auto" aria-label="关闭菜单">${Icons.x}</button>
         </div>
-        <nav class="flex-1 p-4 space-y-1 overflow-y-auto">
-            <a href="/" class="sidebar-link ${activePage === 'inbox' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'inbox' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.inbox}</span>收件箱${unreadBadge}</a>
-            <a href="/trash" class="sidebar-link ${activePage === 'trash' ? 'active bg-red-50 text-red-700' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'trash' ? 'text-red-600' : 'text-gray-400 group-hover:text-red-500'}">${Icons.trash}</span>已删除</a>
-            <a href="/settings" class="sidebar-link ${activePage === 'settings' ? 'active' : 'text-gray-600'} flex items-center px-3 py-3 text-base font-medium rounded-xl group transition-colors"><span class="mr-3 ${activePage === 'settings' ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-500'}">${Icons.gear}</span>设置</a>
+        <nav class="side-nav" aria-label="主导航">
+            ${navItem('inbox', '/', Icons.inbox, '收件箱', badge(unread, true))}
+            ${navItem('starred', '/starred', Icons.star, '已加星标', badge(starred, false, 'nav-star-badge'))}
+            ${navItem('trash', '/trash', Icons.trash, '回收站', badge(trashed, false), true)}
+            <div class="my-2" style="border-top:1px solid var(--border)"></div>
+            ${navItem('settings', '/settings', Icons.gear, '设置', '')}
         </nav>
-        <div class="p-4 border-t border-gray-100 safe-bottom"><a href="/logout" class="flex items-center px-3 py-3 text-base font-medium text-red-600 rounded-xl hover:bg-red-50 transition-colors"><span class="mr-3">${Icons.logout}</span>退出登录</a></div>
+        <div class="side-foot safe-bottom">
+            <button onclick="toggleTheme()" class="nav-item w-full text-left" aria-label="切换深色模式">
+                <span id="theme-ic-light">${Icons.moon}</span><span id="theme-ic-dark" style="display:none">${Icons.sun}</span><span>深色模式</span>
+            </button>
+            <a href="/logout" class="nav-item" style="color:var(--danger)">${Icons.logout}<span>退出登录</span></a>
+        </div>
     </aside>
-    <main class="flex-1 flex flex-col min-w-0 min-h-0 bg-white md:bg-gray-50 w-full relative z-0">${content}</main>
-</body></html>`;
+
+    <main class="main">${content}</main>
+    <script>${GLOBAL_SCRIPT}</script>
+</body>
+</html>`;
 };
 
-const renderLogin = (error = "", siteKey = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>登录</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleLogin(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 登录中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎回来</h1><p class="text-sm text-gray-500 mt-2">请登录您的 Cloudflare 邮箱</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" class="space-y-5" onsubmit="return handleLogin(document.getElementById('loginBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="current-password" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="••••••••" required></div></div>${siteKey ? `<div class="flex justify-center pt-2"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="light"></div></div>` : ''}<button type="submit" id="loginBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
+// ---------- 登录 / 初始化（共用同一套视觉） ----------
 
-const renderSetup = (error = "") => `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><title>系统初始化</title><link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#ffffff"><link rel="icon" type="image/svg+xml" href="/logo.svg"><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');body{font-family:'Inter',system-ui,sans-serif}</style><script>function handleSetup(btn){btn.disabled=true;btn.innerHTML='${Icons.spinner} 创建中...';btn.classList.add('opacity-75','cursor-not-allowed');setTimeout(()=>{if(btn.disabled){btn.disabled=false;btn.innerHTML='完成设置并登录';btn.classList.remove('opacity-75','cursor-not-allowed')}},5000);return true}</script></head><body class="h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 via-white to-blue-50"><div class="w-full max-w-sm bg-white/80 backdrop-blur-xl rounded-2xl shadow-[0_12px_40px_rgb(0,0,0,0.1)] border border-gray-100/70 overflow-hidden"><div class="p-8"><div class="text-center mb-10"><div class="inline-flex items-center justify-center w-14 h-14 bg-indigo-600 rounded-2xl text-white font-bold text-2xl mb-4 shadow-lg shadow-indigo-600/30 transition-all hover:scale-[1.02]">M</div><h1 class="text-2xl font-bold text-gray-900 tracking-tight">欢迎使用</h1><p class="text-sm text-gray-500 mt-2">首次部署，请设置管理员账号</p></div>${error ? `<div class="mb-6 p-4 bg-red-50/80 border border-red-100 text-red-600 text-sm rounded-xl flex items-center shadow-sm animate-pulse"><span class="mr-2">⚠️</span>${escapeHtml(error)}</div>` : ''}<form method="POST" action="/setup" class="space-y-5" onsubmit="return handleSetup(document.getElementById('setupBtn'))"><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">管理员用户名</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.user}</div><input type="text" name="username" autocomplete="username" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="请输入用户名" required></div></div><div class="space-y-1.5"><label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider ml-1">管理员密码</label><div class="relative group"><div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-gray-400 group-focus-within:text-indigo-500 transition-colors">${Icons.lock}</div><input type="password" name="password" autocomplete="new-password" minlength="8" class="block w-full pl-10 pr-4 py-3 bg-gray-50/50 border border-gray-200 text-gray-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all duration-200" placeholder="至少 8 位" required></div><p class="text-xs text-gray-400 ml-1">密码至少 8 位，创建后即可登录</p></div><button type="submit" id="setupBtn" class="w-full py-3.5 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/40 hover:bg-indigo-700 hover:shadow-indigo-600/50 active:scale-[0.98] transition-all duration-200 flex items-center justify-center">完成设置并登录</button></form></div><div class="bg-gray-50/50 p-4 text-center border-t border-gray-100"><p class="text-xs text-gray-400">Powered by Cloudflare Workers</p></div></div></body></html>`;
+const renderAuthShell = (inner, { title, subtitle, siteKey }) => `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>${title} · CF Mail</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#4f46e5">
+    <link rel="icon" type="image/svg+xml" href="/logo.svg">
+    <script>${THEME_BOOT_SCRIPT}</script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    ${siteKey ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>' : ''}
+    <style>${THEME_CSS}</style>
+    <script>
+    function armSubmit(btn, label){
+        if(btn.disabled) return true;
+        btn.disabled = true;
+        btn.dataset.html = btn.innerHTML;
+        btn.innerHTML = '<svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> ' + label;
+        setTimeout(function(){ if(btn.disabled){ btn.disabled = false; btn.innerHTML = btn.dataset.html; } }, 6000);
+        return true;
+    }
+    <\/script>
+</head>
+<body>
+<div class="auth-bg">
+    <div class="auth-side">
+        <div class="auth-orb" style="width:420px;height:420px;background:#a78bfa;top:-120px;right:-120px"></div>
+        <div class="auth-orb" style="width:340px;height:340px;background:#312e81;bottom:-100px;left:-80px"></div>
+        <div class="relative z-10 flex items-center gap-3">
+            <div class="brand-logo" style="width:2.8rem;height:2.8rem;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25);box-shadow:none">
+                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" /></svg>
+            </div>
+            <div><div class="text-xl font-extrabold tracking-tight">CF Mail</div><div class="text-xs text-indigo-200 tracking-widest uppercase">Cloudflare Webmail</div></div>
+        </div>
+        <div class="relative z-10 max-w-md">
+            <h2 class="text-3xl font-extrabold leading-snug tracking-tight mb-8">跑在 Cloudflare<br>边缘网络上的<br>私人邮箱。</h2>
+            <div class="space-y-6">
+                <div class="feat"><div class="feat-ic">${Icons.shield}</div><div><div class="font-semibold mb-1">零服务器 · 零数据库</div><div class="text-sm text-indigo-200 leading-relaxed">Email Routing 收信，原始邮件存入 R2，全部跑在免费额度内。</div></div></div>
+                <div class="feat"><div class="feat-ic">${Icons.lock}</div><div><div class="font-semibold mb-1">纵深安全设计</div><div class="text-sm text-indigo-200 leading-relaxed">正文沙箱隔离渲染，加盐口令哈希，按 IP 限流防爆破。</div></div></div>
+                <div class="feat"><div class="feat-ic">${Icons.translate}</div><div><div class="font-semibold mb-1">一键翻译 · 保留版式</div><div class="text-sm text-indigo-200 leading-relaxed">Workers AI 按原文版式就地翻译，表格图片位置一个不动。</div></div></div>
+            </div>
+        </div>
+        <div class="relative z-10 text-xs text-indigo-300">Powered by Cloudflare Workers · R2 · Workers AI</div>
+    </div>
+    <div class="auth-form-wrap">
+        <div class="auth-card fade-in">
+            <div class="lg:hidden flex items-center gap-3 mb-8">
+                <div class="brand-logo"><svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" /></svg></div>
+                <div class="brand-name">CF Mail</div>
+            </div>
+            <h1 class="text-2xl font-extrabold tracking-tight mb-2" style="color:var(--text-1)">${title}</h1>
+            <p class="text-sm mb-8" style="color:var(--text-2)">${subtitle}</p>
+            ${inner}
+            <p class="text-xs text-center mt-8" style="color:var(--text-3)">Powered by Cloudflare Workers</p>
+        </div>
+    </div>
+</div>
+<script>${GLOBAL_SCRIPT}</script>
+</body>
+</html>`;
+
+const authField = (label, icon, inputHtml, hint) => `
+    <div>
+        <label class="field-label">${label}</label>
+        <div class="relative">
+            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none" style="color:var(--text-3)">${icon}</div>
+            ${inputHtml}
+        </div>
+        ${hint ? `<p class="text-xs mt-1.5" style="color:var(--text-3)">${hint}</p>` : ''}
+    </div>`;
+
+const authInputCls = 'input pl-11 py-3';
+
+const renderLogin = (error = "", siteKey = "") => {
+    const alert = error
+        ? `<div class="alert alert-error mb-6"><span class="flex-shrink-0 mt-0.5">${Icons.alert}</span><span>${escapeHtml(error)}</span></div>`
+        : '';
+    return renderAuthShell(`
+        ${alert}
+        <form method="POST" class="space-y-5" onsubmit="return armSubmit(document.getElementById('loginBtn'), '登录中…')">
+            ${authField('用户名', Icons.user, `<input type="text" name="username" autocomplete="username" class="${authInputCls}" placeholder="请输入用户名" required autofocus>`)}
+            ${authField('密码', Icons.lock, `<input type="password" name="password" autocomplete="current-password" class="${authInputCls}" placeholder="••••••••" required>`)}
+            ${siteKey ? `<div class="flex justify-center pt-1"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="auto"></div></div>` : ''}
+            <button type="submit" id="loginBtn" class="btn btn-primary w-full py-3.5 text-base">登录</button>
+        </form>`,
+        { title: '欢迎回来', subtitle: '登录你的 Cloudflare 私人邮箱', siteKey });
+};
+
+const renderSetup = (error = "") => {
+    const alert = error
+        ? `<div class="alert alert-error mb-6"><span class="flex-shrink-0 mt-0.5">${Icons.alert}</span><span>${escapeHtml(error)}</span></div>`
+        : `<div class="alert alert-info mb-6"><span class="flex-shrink-0 mt-0.5">${Icons.info}</span><span>首次部署需要创建一个管理员账号，之后用它登录即可管理邮箱。</span></div>`;
+    return renderAuthShell(`
+        ${alert}
+        <form method="POST" action="/setup" class="space-y-5" onsubmit="return armSubmit(document.getElementById('setupBtn'), '创建中…')">
+            ${authField('管理员用户名', Icons.user, `<input type="text" name="username" autocomplete="username" class="${authInputCls}" placeholder="请输入用户名" required autofocus>`)}
+            ${authField('管理员密码', Icons.lock, `<input type="password" name="password" autocomplete="new-password" minlength="8" class="${authInputCls}" placeholder="至少 8 位" required>`, '密码至少 8 位，请妥善保管')}
+            <button type="submit" id="setupBtn" class="btn btn-primary w-full py-3.5 text-base">完成设置并登录</button>
+        </form>`,
+        { title: '欢迎使用', subtitle: '只需一步，即可启用你的私人邮箱', siteKey: '' });
+};
 
 // ==========================================
 // 4. 业务逻辑与路由
@@ -1513,8 +1940,12 @@ function sourceBadge(source) {
     return '<span class="inline-flex items-center px-2 py-0.5 rounded-md border text-xs font-medium ' + cls + '">' + text + '</span>';
 }
 
+// ---------- 设置 ----------
+// opts = { error, notice, stats: { total, unread, starred, trash } }
+
 function renderSettings(settings, turnstile, forward, opts) {
     const o = opts || {};
+    const stats = o.stats || {};
     const secretMask = maskSecret(settings.turnstileSecretKey);
     const secretPlaceholder = secretMask
         ? '已配置：' + secretMask + '（留空则保持不变）'
@@ -1522,94 +1953,99 @@ function renderSettings(settings, turnstile, forward, opts) {
 
     let alertHtml = '';
     if (o.error) {
-        alertHtml = '<div class="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl">' + escapeHtml(o.error) + '</div>';
+        alertHtml = '<div class="alert alert-error mb-6"><span class="flex-shrink-0 mt-0.5">' + Icons.alert + '</span><span>' + escapeHtml(o.error) + '</span></div>';
     } else if (o.notice) {
-        alertHtml = '<div class="mb-6 p-4 bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm rounded-xl">' + escapeHtml(o.notice) + '</div>';
+        alertHtml = '<div class="alert alert-ok mb-6"><span class="flex-shrink-0 mt-0.5">' + Icons.check + '</span><span>' + escapeHtml(o.notice) + '</span></div>';
     }
 
     const turnstileState = turnstile.enabled
-        ? '<span class="text-emerald-700 font-medium">已启用</span>，登录页会显示人机验证'
-        : '<span class="text-gray-500 font-medium">未启用</span>，登录页会跳过人机验证';
+        ? '<span class="chip chip-green">已启用</span><span class="text-xs" style="color:var(--text-2)">登录页会显示人机验证</span>'
+        : '<span class="chip chip-gray">未启用</span><span class="text-xs" style="color:var(--text-2)">登录页会跳过人机验证</span>';
+
+    const statCard = (icon, bg, color, num, label) => `
+        <div class="stat">
+            <div class="stat-ic" style="background:${bg};color:${color}">${icon}</div>
+            <div><div class="stat-num">${num}</div><div class="stat-lbl">${label}</div></div>
+        </div>`;
 
     return `
-    <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-        <div class="flex items-center px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm">
-            <a href="/" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a>
-            <h1 class="text-lg sm:text-xl font-bold text-gray-800 ml-1">设置</h1>
+    <div class="view fade-in">
+        <div class="view-head">
+            <a href="/" class="icon-btn" title="返回收件箱">${Icons.back}</a>
+            <h1 class="view-title ml-1">设置</h1>
         </div>
-        <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar">
-            <div class="p-4 sm:p-8 max-w-3xl mx-auto safe-bottom space-y-6">
+        <div class="view-body">
+            <div class="p-4 sm:p-7 max-w-3xl mx-auto safe-bottom">
                 ${alertHtml}
-                <p class="text-sm text-gray-500 leading-relaxed">
-                    配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。
-                    这里的配置<b class="text-gray-700">优先于</b> Dashboard 上配置的同名环境变量。
-                </p>
 
-                <form method="POST" action="/settings" class="space-y-6">
-                    <section class="border border-gray-200 rounded-xl p-5">
-                        <div class="flex items-center justify-between mb-1">
-                            <h2 class="font-semibold text-gray-900">邮件转发</h2>
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                    ${statCard(Icons.inbox, 'var(--brand-50)', 'var(--brand-700)', stats.total || 0, '收件箱邮件')}
+                    ${statCard(Icons.unread, 'var(--info-bg)', 'var(--info-text)', stats.unread || 0, '未读')}
+                    ${statCard(Icons.star, 'var(--warning-bg)', 'var(--warning)', stats.starred || 0, '已加星标')}
+                    ${statCard(Icons.trash, 'var(--danger-bg)', 'var(--danger)', stats.trash || 0, '回收站')}
+                </div>
+
+                <p class="panel-desc mb-6">配置保存在你的 R2 存储桶中，部署后无需再打开 Cloudflare 控制台。这里的配置<b style="color:var(--text-1)">优先于</b> Dashboard 上配置的同名环境变量。</p>
+
+                <form method="POST" action="/settings" class="space-y-5">
+                    <section class="panel">
+                        <div class="flex items-center justify-between gap-3 mb-1 flex-wrap">
+                            <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.send}</span>邮件转发</h2>
                             ${sourceBadge(forward.source)}
                         </div>
-                        <p class="text-xs text-gray-500 mb-3">邮件存入 R2 成功后，自动转发一份到这个邮箱。留空表示不转发。</p>
-                        <input type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com"
-                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                        <p class="panel-desc mb-4">邮件存入 R2 成功后，自动转发一份到这个邮箱。留空表示不转发。</p>
+                        <input type="email" name="forward_email" autocomplete="off" value="${escapeAttr(settings.forwardEmail || '')}" placeholder="you@example.com" class="input">
                     </section>
 
-                    <section class="border border-gray-200 rounded-xl p-5">
-                        <div class="flex items-center justify-between mb-1">
-                            <h2 class="font-semibold text-gray-900">人机验证 · Cloudflare Turnstile</h2>
+                    <section class="panel">
+                        <div class="flex items-center justify-between gap-3 mb-1 flex-wrap">
+                            <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.shield}</span>人机验证 · Cloudflare Turnstile</h2>
                             ${sourceBadge(turnstile.source)}
                         </div>
-                        <p class="text-xs text-gray-500 mb-4">当前状态：${turnstileState}。<br>两个 Key 必须<b>成对填写</b>；只填一个不会生效，也不会把你自己锁在门外。</p>
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Site Key</label>
-                        <input type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx"
-                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all mb-4">
-                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Secret Key</label>
-                        <input type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}"
-                            class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        <p class="text-xs text-gray-400 mt-2">Secret Key 只保存在 R2，不会回显。留空表示保持原值不变。</p>
+                        <div class="flex items-center gap-2 my-3 flex-wrap">${turnstileState}</div>
+                        <p class="panel-desc mb-4">两个 Key 必须<b style="color:var(--text-1)">成对填写</b>；只填一个不会生效，也不会把你自己锁在门外。</p>
+                        <label class="field-label">Site Key</label>
+                        <input type="text" name="turnstile_site_key" autocomplete="off" value="${escapeAttr(settings.turnstileSiteKey || '')}" placeholder="0x4AAAAAAAxxxxxxxxxxxxxxxx" class="input mb-4">
+                        <label class="field-label">Secret Key</label>
+                        <input type="password" name="turnstile_secret_key" autocomplete="new-password" value="" placeholder="${escapeAttr(secretPlaceholder)}" class="input">
+                        <p class="text-xs mt-2" style="color:var(--text-3)">Secret Key 只保存在 R2，不会回显。留空表示保持原值不变。</p>
                     </section>
 
-                    <div class="flex items-center gap-3">
-                        <button type="submit" class="px-5 py-3 bg-indigo-600 text-white rounded-xl font-semibold shadow-lg shadow-indigo-600/30 hover:bg-indigo-700 active:scale-[0.98] transition-all">保存设置</button>
-                        <a href="/settings" class="px-5 py-3 text-gray-600 font-medium rounded-xl hover:bg-gray-100 transition-colors">放弃修改</a>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <button type="submit" class="btn btn-primary">保存设置</button>
+                        <a href="/settings" class="btn btn-ghost">放弃修改</a>
                     </div>
                 </form>
 
-                <form method="POST" action="/settings/password" class="space-y-4 border border-gray-200 rounded-xl p-5">
-                    <div>
-                        <h2 class="font-semibold text-gray-900 mb-1">修改密码</h2>
-                        <p class="text-xs text-gray-500">更新后<b class="text-gray-700">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
+                <form method="POST" action="/settings/password" class="panel mt-5">
+                    <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.key}</span>修改密码</h2>
+                    <p class="panel-desc mb-4">更新后<b style="color:var(--text-1)">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div><label class="field-label">当前密码</label><input type="password" name="current_password" autocomplete="current-password" required class="input"></div>
+                        <div><label class="field-label">新密码</label><input type="password" name="new_password" autocomplete="new-password" minlength="8" required placeholder="至少 8 位" class="input"></div>
+                        <div><label class="field-label">确认新密码</label><input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required class="input"></div>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">当前密码</label>
-                            <input type="password" name="current_password" autocomplete="current-password" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">新密码</label>
-                            <input type="password" name="new_password" autocomplete="new-password" minlength="8" required placeholder="至少 8 位" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">确认新密码</label>
-                            <input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                        </div>
-                    </div>
-                    <button type="submit" class="px-5 py-3 bg-gray-900 text-white rounded-xl font-semibold hover:bg-gray-800 active:scale-[0.98] transition-all">更新密码</button>
+                    <button type="submit" class="btn btn-dark mt-5">更新密码</button>
                 </form>
 
-                <section class="border border-red-100 bg-red-50/40 rounded-xl p-5">
-                    <h2 class="font-semibold text-gray-900 mb-1">危险操作</h2>
-                    <p class="text-xs text-gray-500 mb-3">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
+                <section class="panel mt-5" style="border-color:var(--danger-border);background:color-mix(in srgb, var(--danger-bg) 45%, var(--surface))">
+                    <h2 class="panel-title" style="color:var(--danger)"><span>${Icons.alert}</span>危险操作</h2>
+                    <p class="panel-desc mb-4">清空应用内保存的 Turnstile 密钥。若 Dashboard 上配置了同名环境变量，清空后会自动回退到环境变量。</p>
                     <form method="POST" action="/settings/clear-turnstile">
-                        <button type="submit" onclick="return askClear(this)" class="px-4 py-2.5 bg-white border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors active:scale-[0.98]">清空 Turnstile 密钥</button>
+                        <button type="submit" onclick="return askClear(this)" class="btn btn-danger-soft">清空 Turnstile 密钥</button>
                     </form>
                 </section>
 
-                <p class="text-xs text-gray-400 leading-relaxed">
-                    提示：Turnstile 的 Site Key 是服务端渲染进登录页的，保存后<b>下次打开登录页</b>生效。
-                </p>
+                <div class="mt-6 panel !p-4">
+                    <div class="flex items-start gap-3">
+                        <span class="flex-shrink-0 mt-0.5" style="color:var(--text-3)">${Icons.info}</span>
+                        <div class="text-xs leading-relaxed" style="color:var(--text-2)">
+                            <p class="font-bold mb-1" style="color:var(--text-1)">键盘快捷键</p>
+                            <p><span class="kbd">J</span> / <span class="kbd">K</span> 在列表中上下移动　<span class="kbd">X</span> 勾选　<span class="kbd">↵</span> 打开邮件　<span class="kbd">/</span> 聚焦搜索　<span class="kbd">Esc</span> 关闭弹窗</p>
+                            <p class="mt-2">Turnstile 的 Site Key 是服务端渲染进登录页的，保存后<b>下次打开登录页</b>生效。</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>`;
@@ -1689,9 +2125,10 @@ function frameShell(inner) {
     return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
         + '<meta name="viewport" content="width=device-width, initial-scale=1">'
         + '<meta name="referrer" content="no-referrer">'
-        + '<style>' + FRAME_CSS + '</style></head><body>'
+        + '<style>' + FRAME_CSS + '@media print{#mail-root{padding:0}body{font-size:13px;color:#000}a{color:#000;text-decoration:none}}' + '</style></head><body>'
         + '<div id="mail-root">' + inner + '</div>'
         + '<script>' + FRAME_HEIGHT_SCRIPT + '<\/script>'
+        + '<script>try{if(/(?:^|&)print=1(?:&|$)/.test(location.search.slice(1))){window.addEventListener("load",function(){setTimeout(function(){window.print()},450)})}}catch(e){}<\/script>'
         + '</body></html>';
 }
 
@@ -1734,7 +2171,11 @@ async function buildTranslatedFrame(env, email, source) {
 // ---------- 邮件详情渲染 ----------
 // 收件箱与回收站两条分支共用这一份，避免改一处漏一处。
 
-function renderEmailDetail(email, key, isTrash, uploaded) {
+// ---------- 邮件详情 ----------
+// extra = { prevKey, nextKey, isStarred, isRead }
+
+function renderEmailDetail(email, key, isTrash, uploaded, extra) {
+    const ex = extra || {};
     const fromRaw = String(email.headers['from'] || '');
     const senderName = (fromRaw.split('<')[0] || '').trim().replace(/"/g, '') || '未知发件人';
     const senderEmail = (fromRaw.match(/<([^>]+)>/) || [])[1] || fromRaw.replace(/[<>]/g, '').trim();
@@ -1744,83 +2185,125 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
     const uploadedTs = new Date(uploaded).getTime();
     const uploadedIso = Number.isFinite(uploadedTs) ? new Date(uploadedTs).toISOString() : '';
     const encodedKey = encodeURIComponent(key);
+    const isStarred = !!ex.isStarred;
+    const isRead = ex.isRead !== false;
 
-    // 只有正文里**确实**含有可执行内容（脚本 / 内联事件 / javascript: URL）时才提示一句。
-    // 普通邮件不留任何多余文字 —— 常驻一句「已剥离脚本」对 99% 的邮件毫无信息量，
-    // 而且「已被剥离」的措辞容易被读成「邮件坏了」。这里只在真的发生过剥离时解释一句。
     const strippedNotice = (email.html && stripActiveContent(email.html).removed)
-        ? `<p class="mt-3 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">这封邮件含有脚本或内联事件，已为安全起见移除；正文其余内容不受影响。</p>`
+        ? `<div class="alert alert-info mt-4"><span class="flex-shrink-0 mt-0.5">${Icons.shield}</span><span>这封邮件含有脚本或内联事件，已为安全起见移除；正文其余内容不受影响。</span></div>`
         : '';
 
     let attachmentsHtml = '';
     if (email.attachments.length > 0) {
         attachmentsHtml = `
-        <div class="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4">
-            <div class="flex items-center text-sm font-semibold text-gray-700 mb-3">${Icons.attach}<span class="ml-2">附件 (${email.attachments.length})</span></div>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="panel !p-4 sm:!p-5 mb-6">
+            <div class="flex items-center text-sm font-bold mb-4" style="color:var(--text-1)"><span style="color:var(--brand-700)">${Icons.attach}</span><span class="ml-2">附件</span><span class="chip chip-gray ml-2">${email.attachments.length}</span></div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 ${email.attachments.map((att, index) => `
-                <div class="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div class="flex items-center min-w-0 flex-1 mr-2">
-                        <div class="bg-indigo-100 text-indigo-600 rounded-md p-1.5 mr-3 flex-shrink-0">${Icons.file}</div>
-                        <div class="min-w-0">
-                            <p class="text-sm font-medium text-gray-900 truncate" title="${escapeAttr(att.filename)}">${escapeHtml(att.filename)}</p>
-                            <p class="text-xs text-gray-500">${escapeHtml(att.sizeStr)}</p>
-                        </div>
+                <div class="att">
+                    <div class="att-ic">${Icons.file}</div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-semibold truncate" style="color:var(--text-1)" title="${escapeAttr(att.filename)}">${escapeHtml(att.filename)}</p>
+                        <p class="text-xs" style="color:var(--text-3)">${escapeHtml(att.sizeStr)}</p>
                     </div>
-                    <a href="/attachment/${encodedKey}/${index}" download="${escapeAttr(att.filename)}" class="text-indigo-600 hover:text-indigo-800 p-2 hover:bg-indigo-50 rounded-full transition active:scale-95" title="下载附件">${Icons.download}</a>
+                    <a href="/attachment/${encodedKey}/${index}" download="${escapeAttr(att.filename)}" class="icon-btn" title="下载附件">${Icons.download}</a>
                 </div>`).join('')}
             </div>
         </div>`;
     }
 
-    // 翻译按钮。译文由服务端按原文版式「就地替换文字」生成，原文已是中文 / 语种不受支持时会在状态条上明确说明。
-    const translateBtn = `
-            <button id="translate-btn" onclick="translateMail()" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="按原文版式就地翻译成中文">${Icons.translate} <span class="ml-1">翻译</span></button>`;
+    // 原始头部查看：只展示有信息量的字段
+    const headerRows = [
+        ['发件人', 'from'], ['收件人', 'to'], ['抄送', 'cc'], ['日期', 'date'],
+        ['主题', 'subject'], ['Message-ID', 'message-id'], ['回复至', 'reply-to'],
+        ['Return-Path', 'return-path'], ['X-Mailer', 'x-mailer']
+    ].filter(([, k]) => email.headers[k])
+     .map(([label, k]) => `<dt>${label}</dt><dd>${escapeHtml(String(email.headers[k]))}</dd>`).join('');
+    const headersHtml = headerRows ? `
+        <details class="panel !p-4 sm:!p-5 mb-6 group">
+            <summary class="flex items-center gap-2 cursor-pointer font-bold text-sm list-none" style="color:var(--text-1)">
+                <span style="color:var(--brand-700)">${Icons.code}</span>查看原始头部
+                <span class="ml-auto text-xs font-medium" style="color:var(--text-3)">点击展开</span>
+            </summary>
+            <dl class="kv mt-4 pt-4" style="border-top:1px solid var(--border)">${headerRows}</dl>
+        </details>` : '';
 
-    // 下载原始邮件。归档备份、喂给别的客户端、排障看真实头部都用得上。
-    const rawBtn = `
-            <a href="/raw/${encodedKey}" download class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="下载原始邮件（.eml）">${Icons.download}<span class="ml-1 hidden sm:inline">原文</span></a>`;
+    const navBtn = (targetKey, icon, label, disabled) => disabled
+        ? `<span class="icon-btn" style="opacity:.3;cursor:not-allowed" aria-disabled="true" title="${label}">${icon}</span>`
+        : `<a href="/email/${encodeURIComponent(targetKey)}" class="icon-btn" title="${label}">${icon}</a>`;
 
-    const toolbar = isTrash ? `
-        <div class="flex items-center space-x-1 sm:space-x-2">
-            ${translateBtn}
-            ${rawBtn}
-            <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')">
-                <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.refresh} <span class="ml-1">恢复</span></button>
+    const starBtn = isTrash ? '' : `
+        <button id="detail-star-btn" onclick="toggleStarDetail()" class="star-btn !w-10 !h-10${isStarred ? ' on' : ''}"
+            title="${isStarred ? '取消星标' : '加星标'}" aria-pressed="${isStarred ? 'true' : 'false'}">
+            ${isStarred ? Icons.starFill : Icons.star}
+        </button>`;
+
+    const readBtn = isTrash ? '' : `
+        <button id="detail-read-btn" onclick="toggleReadDetail()" class="icon-btn" title="${isRead ? '标记为未读' : '标记为已读'}">
+            ${isRead ? Icons.unread : Icons.read}
+        </button>`;
+
+    const toolbar = `
+        <div class="flex items-center gap-0.5 sm:gap-1">
+            ${navBtn(ex.prevKey, Icons.chevL, '上一封（更新的）', !ex.prevKey)}
+            ${navBtn(ex.nextKey, Icons.chevR, '下一封（更早的）', !ex.nextKey)}
+            <span class="w-px h-6 mx-1 hidden sm:block" style="background:var(--border)"></span>
+            ${starBtn}
+            ${readBtn}
+            <button id="translate-btn" onclick="translateMail()" class="btn btn-soft !py-2 !px-3 !text-[13px]" title="按原文版式就地翻译成中文">${Icons.translate}<span class="hidden sm:inline">翻译</span></button>
+            <a href="/raw/${encodedKey}" download class="icon-btn" title="下载原始邮件（.eml）">${Icons.download}</a>
+            <button onclick="printMail()" class="icon-btn" title="打印邮件正文">${Icons.print}</button>
+            ${isTrash ? `
+            <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')" class="contents">
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="icon-btn" style="color:var(--success)" title="恢复到收件箱">${Icons.refresh}</button>
             </form>
-            <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)">
-                <input type="hidden" name="key" value="${escapeAttr(key)}"><button class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]">${Icons.trash} <span class="ml-1">删除</span></button>
-            </form>
-        </div>` : `
-        <div class="flex items-center space-x-1 sm:space-x-2">
-            ${translateBtn}
-            ${rawBtn}
-            <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')"><input type="hidden" name="key" value="${escapeAttr(key)}"><button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors active:scale-95" title="移入回收站">${Icons.trash}</button></form>
+            <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)" class="contents">
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="icon-btn danger" title="彻底删除">${Icons.trash}</button>
+            </form>` : `
+            <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')" class="contents">
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="icon-btn danger" title="移入回收站">${Icons.trash}</button>
+            </form>`}
         </div>`;
 
     return `
-    <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-        <div class="flex items-center justify-between px-3 py-3 sm:px-4 border-b border-gray-100 bg-white z-10 sticky top-0 shadow-sm">
-            <div class="flex items-center"><a href="${isTrash ? '/trash' : '/'}" class="p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors mr-1 active:scale-95">${Icons.back}</a></div>
+    <div class="view fade-in">
+        <div class="view-head">
+            <a href="${isTrash ? '/trash' : '/'}" class="icon-btn" title="返回列表">${Icons.back}</a>
+            <div class="flex-1 min-w-0"></div>
             ${toolbar}
         </div>
-        <div class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar">
-            <div class="p-4 sm:p-8 max-w-4xl mx-auto safe-bottom">
-                <h1 class="text-xl sm:text-3xl font-bold text-gray-900 mb-5 leading-snug select-text break-words">${escapeHtml(subject)}</h1>
-                <div class="flex items-start justify-between pb-6 border-b border-gray-100 mb-6">
-                    <div class="flex items-center overflow-hidden">
-                        <div class="w-10 h-10 sm:w-12 sm:h-12 ${avatarColor} rounded-full flex items-center justify-center text-white font-bold text-lg shadow-md flex-shrink-0">${initial}</div>
-                        <div class="ml-3 sm:ml-4 min-w-0">
-                            <div class="font-semibold text-gray-900 text-sm sm:text-base select-text truncate">${escapeHtml(senderName)}</div>
-                            <div class="text-xs sm:text-sm text-gray-500 select-text truncate">&lt;${escapeHtml(senderEmail)}&gt;</div>
+        <div class="view-body">
+            <div class="px-4 sm:px-8 py-6 sm:py-8 max-w-4xl mx-auto safe-bottom">
+                <h1 class="text-xl sm:text-[1.7rem] font-extrabold leading-snug tracking-tight mb-5 break-words select-text" style="color:var(--text-1)">${escapeHtml(subject)}</h1>
+
+                <div class="panel !p-4 sm:!p-5 mb-6">
+                    <div class="flex items-center gap-3 sm:gap-4">
+                        <div class="avatar w-11 h-11 sm:w-12 sm:h-12 text-lg ${avatarColor}">${initial}</div>
+                        <div class="min-w-0 flex-1">
+                            <div class="font-bold text-[15px] truncate select-text" style="color:var(--text-1)">${escapeHtml(senderName)}</div>
+                            <button data-email="${escapeAttr(senderEmail)}" onclick="copyText(this.dataset.email, '发件人地址已复制')" class="text-[13px] truncate select-text flex items-center gap-1.5 min-w-0 max-w-full hover:underline" style="color:var(--text-2)" title="点击复制地址">
+                                <span class="truncate">&lt;${escapeHtml(senderEmail)}&gt;</span><span class="flex-shrink-0" style="color:var(--text-3)">${Icons.copy}</span>
+                            </button>
+                        </div>
+                        <div class="text-xs whitespace-nowrap flex-shrink-0" style="color:var(--text-3)">
+                            <time data-ts="${Number.isFinite(uploadedTs) ? uploadedTs : 0}" data-fmt="full" datetime="${escapeAttr(uploadedIso)}"></time>
                         </div>
                     </div>
-                    <div class="text-xs sm:text-sm text-gray-400 whitespace-nowrap ml-2 mt-1"><time data-ts="${Number.isFinite(uploadedTs) ? uploadedTs : 0}" data-fmt="full" datetime="${escapeAttr(uploadedIso)}"></time></div>
+                    <div class="flex flex-wrap gap-2 mt-3.5">
+                        ${isStarred ? '<span class="chip chip-amber">★ 已加星标</span>' : ''}
+                        ${isTrash ? '<span class="chip chip-gray">回收站</span>' : (isRead ? '<span class="chip chip-blue">已读</span>' : '<span class="chip chip-green">未读</span>')}
+                        ${email.attachments.length ? `<span class="chip chip-gray">${Icons.attach} ${email.attachments.length} 个附件</span>` : ''}
+                    </div>
                 </div>
+
                 ${attachmentsHtml}
+                ${headersHtml}
+
                 <div id="translate-status" class="hidden"></div>
                 <div id="mail-body">
-                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 block" style="height:320px;background:var(--surface);border-radius:14px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
                     ${strippedNotice}
                 </div>
             </div>
@@ -1839,26 +2322,20 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
             var box = el('translate-status');
             if (!box) return;
             if (!text) { box.className = 'hidden'; box.textContent = ''; return; }
-            box.className = 'mb-4 px-4 py-3 rounded-xl text-sm border ' + (kind === 'error'
-                ? 'bg-red-50 border-red-100 text-red-600'
-                : 'bg-indigo-50 border-indigo-100 text-indigo-700');
+            box.className = 'alert mb-5 ' + (kind === 'error' ? 'alert-error' : 'alert-info');
             box.textContent = text;
         }
-
         function setLabel(btn, text) {
             var label = btn ? btn.querySelector('span') : null;
             if (label) label.textContent = text;
         }
 
-        // ⚠️ 原文与译文共用**同一个 iframe 元素**，切换时只改 src，不隐藏、不替换节点。
-        //    这样元素的位置、宽度、父容器结构都不会变 —— 也就是「不改变原始显示位置」。
-        //    服务端在 /frame/<key>?t=1 上做的是「按 token 就地替换文字」，
-        //    标签结构原样保留，所以译文渲染出来的版式和原文一致，切回原文也不会跳。
+        // 原文与译文共用同一个 iframe 元素，切换只改 src —— 元素位置不动，只换内容。
         window.translateMail = function () {
             var btn = el('translate-btn');
             var frame = el('mail-frame');
             if (busy) return;
-
+            if (!btn || btn.disabled) return;
             if (translated) {
                 translated = false;
                 if (frame) frame.src = ORIGINAL_SRC;
@@ -1866,14 +2343,11 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 setStatus('', 'info');
                 return;
             }
-            if (!btn || btn.disabled) return;
-
             btn.disabled = true;
             busy = true;
-            btn.classList.add('opacity-60', 'cursor-not-allowed');
+            btn.classList.add('opacity-60');
             setLabel(btn, '翻译中…');
             setStatus('正在按原文版式就地翻译，长邮件可能需要十几秒…', 'info');
-
             fetch('/api/translate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1891,8 +2365,8 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 }
                 translated = true;
                 if (frame) frame.src = TRANSLATED_SRC;
-                var note = '已按原文版式就地翻译　·　源语言：' + data.sourceLang;
-                if (data.truncated) note += '　·　另有 ' + data.skipped + ' 个片段保留原文（超出预算或未翻出）';
+                var note = '已按原文版式就地翻译 · 源语言：' + data.sourceLang;
+                if (data.truncated) note += ' · 另有 ' + data.skipped + ' 个片段保留原文（超出预算或未翻出）';
                 setStatus(note, 'info');
                 setLabel(btn, '显示原文');
             }).catch(function () {
@@ -1901,11 +2375,179 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
             }).then(function () {
                 btn.disabled = false;
                 busy = false;
-                btn.classList.remove('opacity-60', 'cursor-not-allowed');
+                btn.classList.remove('opacity-60');
             });
         };
+
+        // 详情页星标切换（无刷新）
+        window.toggleStarDetail = function () {
+            var btn = el('detail-star-btn');
+            if (!btn || btn.disabled) return;
+            var on = btn.classList.contains('on');
+            btn.disabled = true;
+            fetch('/api/flag', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: KEY, star: !on }) })
+                .then(function (r) { return r.json().catch(function () { return null; }); })
+                .then(function (d) {
+                    if (d && d.ok) { setStarUI(btn, d.star); toast(d.star ? '已加星标' : '已取消星标', 'success'); }
+                    else toast((d && d.error) || '操作失败', 'error');
+                })
+                .catch(function () { toast('网络错误', 'error'); })
+                .then(function () { btn.disabled = false; });
+        };
+
+        // 详情页已读 / 未读切换（无刷新）
+        var detailRead = ${isRead ? 'true' : 'false'};
+        window.toggleReadDetail = function () {
+            var btn = el('detail-read-btn');
+            if (!btn || btn.disabled) return;
+            btn.disabled = true;
+            fetch('/api/flag', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: KEY, read: !detailRead }) })
+                .then(function (r) { return r.json().catch(function () { return null; }); })
+                .then(function (d) {
+                    if (d && d.ok) {
+                        detailRead = d.read;
+                        btn.title = detailRead ? '标记为未读' : '标记为已读';
+                        btn.innerHTML = detailRead ? ${jsonForScript(Icons.unread)} : ${jsonForScript(Icons.read)};
+                        toast(detailRead ? '已标记为已读' : '已标记为未读', 'success');
+                    } else toast((d && d.error) || '操作失败', 'error');
+                })
+                .catch(function () { toast('网络错误', 'error'); })
+                .then(function () { btn.disabled = false; });
+        };
+
+        // 打印：在新标签页打开纯净正文文档并自动调起打印
+        window.printMail = function () {
+            window.open(ORIGINAL_SRC + (ORIGINAL_SRC.indexOf('?') >= 0 ? '&' : '?') + 'print=1', '_blank');
+        };
     })();
-    </script>`;
+    <\/script>`;
+}
+
+// ---------- 邮件列表页 ----------
+// p = {
+//   mode: 'inbox' | 'starred' | 'trash',
+//   title, countLine, query, searchAction,
+//   rows: [{ fullKey, dataKey, senderName, subject, ts, iso, isRead, isStarred, avatarColor, initial }],
+//   empty: { icon, title, desc },
+//   hasMore, nextHref, remaining,
+//   showMarkAllRead
+// }
+
+function renderMailListPage(p) {
+    const isTrash = p.mode === 'trash';
+    const isStarred = p.mode === 'starred';
+
+    const batchButtons = isTrash ? `
+        <button type="button" onclick="confirmBatch('restore')" class="btn btn-success-soft !py-2 !px-3.5 !text-[13px]">${Icons.refresh}<span class="hidden sm:inline">恢复</span></button>
+        <button type="button" onclick="confirmBatch('purge')" class="btn btn-danger-soft !py-2 !px-3.5 !text-[13px]">${Icons.trash}<span class="hidden sm:inline">彻底删除</span></button>`
+    : isStarred ? `
+        <button type="button" onclick="confirmBatch('mark_read')" class="icon-btn" title="标记为已读">${Icons.read}</button>
+        <button type="button" onclick="confirmBatch('mark_unread')" class="icon-btn" title="标记为未读">${Icons.unread}</button>
+        <button type="button" onclick="confirmBatch('unstar')" class="btn btn-soft !py-2 !px-3.5 !text-[13px]">${Icons.star}<span class="hidden sm:inline">取消星标</span></button>
+        <button type="button" onclick="confirmBatch('delete')" class="icon-btn danger" title="移入回收站">${Icons.trash}</button>`
+    : `
+        <button type="button" onclick="confirmBatch('mark_read')" class="icon-btn" title="标记为已读">${Icons.read}</button>
+        <button type="button" onclick="confirmBatch('mark_unread')" class="icon-btn" title="标记为未读">${Icons.unread}</button>
+        <button type="button" onclick="confirmBatch('star')" class="icon-btn" title="加星标">${Icons.star}</button>
+        <button type="button" onclick="confirmBatch('delete')" class="icon-btn danger" title="移入回收站">${Icons.trash}</button>`;
+
+    const rowsHtml = p.rows.map(r => {
+        const starBtn = isTrash ? '' : `
+            <button class="star-btn${r.isStarred ? ' on' : ''}" onclick="return toggleStar(this)"
+                title="${r.isStarred ? '取消星标' : '加星标'}" aria-pressed="${r.isStarred ? 'true' : 'false'}" aria-label="星标">
+                ${r.isStarred ? Icons.starFill : Icons.star}
+            </button>`;
+        return `
+        <div class="email-row${r.isRead ? '' : ' unread'}" data-key="${r.dataKeyAttr}">
+            <div class="flex items-center gap-2.5 sm:gap-3.5 px-3 sm:px-5 py-3 sm:py-3.5">
+                <label class="cbx flex-shrink-0" aria-label="选择">
+                    <input type="checkbox" name="keys" value="${r.fullKeyAttr}" onchange="updateRowStyle(this)">
+                    <span class="box"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></span>
+                </label>
+                ${starBtn}
+                <div class="avatar w-10 h-10 text-[15px] ${r.avatarColor}">${r.initial}</div>
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-baseline justify-between gap-3">
+                        <p class="text-[15px] truncate ${r.isRead ? '' : 'font-bold'}" style="color:var(--text-1)">${r.isRead || isTrash ? '' : '<span class="unread-dot"></span>'}${r.senderName}</p>
+                        <time class="text-xs flex-shrink-0" style="color:var(--text-3)" data-ts="${r.ts}" datetime="${r.iso}"></time>
+                    </div>
+                    <p class="text-[13.5px] truncate mt-0.5 ${r.isRead ? '' : 'font-semibold'}" style="color:${r.isRead ? 'var(--text-2)' : 'var(--text-1)'}">${r.subject}</p>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    const emptyHtml = p.rows.length === 0 ? `
+        <div class="empty">
+            <div class="empty-icon">${p.empty.icon}</div>
+            <h3>${p.empty.title}</h3>
+            <p>${p.empty.desc}</p>
+        </div>` : '';
+
+    const footerHtml = p.hasMore ? `
+        <div class="px-4 py-6 text-center">
+            <a href="${p.nextHrefAttr}" class="btn btn-outline">加载更多<span class="chip chip-gray ml-1">还有 ${p.remaining} 封</span></a>
+        </div>` : (p.rows.length > 0 ? `
+        <div class="px-4 py-6 text-center text-xs" style="color:var(--text-3)">— 已经到底了 —</div>` : '');
+
+    const markAllRead = (!isTrash && !isStarred && p.showMarkAllRead) ? `
+        <form method="POST" action="/mark-all-read" onsubmit="return confirmSingle(event, '将收件箱全部邮件标记为已读？')" class="flex-shrink-0">
+            <input type="hidden" name="next" value="/">
+            <button class="icon-btn" title="全部标记为已读">${Icons.checkAll}</button>
+        </form>` : '';
+
+    return `
+    <div class="view fade-in">
+        <div class="view-head">
+            <button onclick="toggleMenu()" class="icon-btn md:hidden" aria-label="打开菜单">${Icons.menu}</button>
+            <label class="cbx flex-shrink-0 ml-1" title="全选" aria-label="全选">
+                <input type="checkbox" onclick="toggleAll(this)">
+                <span class="box"><svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></span>
+            </label>
+            <div id="default-header" class="flex items-center justify-between flex-1 min-w-0 ml-1">
+                <div class="min-w-0">
+                    <h1 class="view-title truncate">${p.title}</h1>
+                </div>
+                <div class="flex items-center gap-0.5 flex-shrink-0">
+                    ${markAllRead}
+                    <button onclick="window.location.reload()" class="icon-btn" title="刷新">${Icons.refresh}</button>
+                    <a href="/settings" class="icon-btn" title="设置">${Icons.gear}</a>
+                </div>
+            </div>
+            <div id="action-header" class="hidden flex-1 items-center justify-between min-w-0 ml-1">
+                <span class="text-sm font-medium whitespace-nowrap mr-2" style="color:var(--text-2)">已选 <span id="selected-count" class="font-extrabold" style="color:var(--brand-700)">0</span></span>
+                <div class="flex items-center gap-1">${batchButtons}</div>
+            </div>
+        </div>
+
+        <form method="GET" action="${p.searchAction}" class="flex items-center gap-2 px-3 sm:px-5 py-2.5 flex-shrink-0" style="border-bottom:1px solid var(--border);background:var(--surface)">
+            <div class="relative flex-1 min-w-0">
+                <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style="color:var(--text-3)">${Icons.search}</span>
+                <input id="list-search" type="search" name="q" value="${p.queryAttr}" autocomplete="off" placeholder="搜索主题或发件人…  ( 按 / 快速聚焦 )"
+                    class="input !py-2.5 !pl-10 !rounded-xl !text-[13.5px]">
+            </div>
+            <button type="submit" class="btn btn-primary !py-2.5">搜索</button>
+            ${p.query ? `<a href="${p.searchAction}" class="btn btn-ghost !py-2.5">清除</a>` : ''}
+        </form>
+
+        <div class="view-body">
+            <form id="batch-form" method="POST" action="/batch-action">
+                <input type="hidden" name="next" value="${p.nextValue}">
+                <div class="px-4 sm:px-5 py-2 flex items-center justify-between gap-3 flex-shrink-0" style="border-bottom:1px solid var(--border)">
+                    <span class="text-xs" style="color:var(--text-3)">${p.countLine}</span>
+                    <span class="text-xs hidden lg:flex items-center gap-1.5" style="color:var(--text-3)">
+                        <span class="kbd">J</span><span class="kbd">K</span> 移动
+                        <span class="kbd ml-1">X</span> 选择
+                        <span class="kbd ml-1">↵</span> 打开
+                    </span>
+                </div>
+                <div id="mail-list">${rowsHtml}</div>
+                ${emptyHtml}
+                ${footerHtml}
+                <div class="safe-bottom"></div>
+            </form>
+        </div>
+    </div>`;
 }
 
 async function handleRequest(request, env, ctx) {
@@ -2093,8 +2735,70 @@ async function handleRequest(request, env, ctx) {
     }
 
     // ---------- 应用内设置页 ----------
+    // 邮箱统计：设置页卡片 + 各处徽标共用，一次列举算完
+    async function getMailboxStats(env) {
+        const stats = { total: 0, unread: 0, starred: 0, trash: 0 };
+        try {
+            for (const o of await listAllObjects(env)) {
+                if (o.key.startsWith(TRASH_PREFIX)) { stats.trash++; continue; }
+                if (!isMailKey(o.key)) continue;
+                stats.total++;
+                const md = o.customMetadata || {};
+                if (md.isRead !== 'true') stats.unread++;
+                if (md.isStarred === 'true') stats.starred++;
+            }
+        } catch (e) {}
+        return stats;
+    }
+
+    // ---------- 星标 / 已读状态（JSON，无刷新切换） ----------
+    if (url.pathname === '/api/flag' && method === 'POST') {
+        let body = null;
+        try { body = await request.json(); } catch (e) {}
+        const rawKey = body && typeof body.key === 'string' ? body.key : '';
+        // resolveEmailKey 会拒绝 CONFIG_FILE 与 _sys/ 内部键，天然防越权
+        const resolved = rawKey ? await resolveEmailKey(env, rawKey) : null;
+        if (!resolved) return jsonResponse({ ok: false, error: '邮件不存在或已删除' }, 404);
+        const meta = Object.assign({}, resolved.obj.customMetadata);
+        let changed = false;
+        if (body && typeof body.star === 'boolean') { meta.isStarred = body.star ? 'true' : 'false'; changed = true; }
+        if (body && typeof body.read === 'boolean' && !resolved.isTrash) { meta.isRead = body.read ? 'true' : 'false'; changed = true; }
+        if (changed) {
+            const buf = await resolved.obj.arrayBuffer();
+            await env.MAIL_BUCKET.put(resolved.key, buf, { customMetadata: meta });
+        }
+        let starCount = 0;
+        try {
+            for (const o of await listAllObjects(env)) {
+                if (isMailKey(o.key) && (o.customMetadata || {}).isStarred === 'true') starCount++;
+            }
+        } catch (e) {}
+        return jsonResponse({ ok: true, star: meta.isStarred === 'true', read: meta.isRead !== 'false', starCount: starCount });
+    }
+
+    // ---------- 全部标记为已读 ----------
+    if (url.pathname === '/mark-all-read' && method === 'POST') {
+        const fd = await request.formData();
+        const back = String(fd.get('next') || '') === '/starred' ? '/starred' : '/';
+        let n = 0;
+        for (const o of await listAllObjects(env)) {
+            if (!isMailKey(o.key)) continue;
+            if ((o.customMetadata || {}).isRead === 'true') continue;
+            const obj = await env.MAIL_BUCKET.get(o.key);
+            if (!obj) continue;
+            await env.MAIL_BUCKET.put(o.key, obj.body, {
+                customMetadata: Object.assign({}, obj.customMetadata, { isRead: 'true' })
+            });
+            n++;
+        }
+        const msg = n > 0 ? ('已将 ' + n + ' 封邮件标记为已读') : '没有未读邮件';
+        return Response.redirect(url.origin + back + '?toast=' + encodeURIComponent(msg), 302);
+    }
+
     if (url.pathname === '/settings') {
         const settings = await getSettings(env);
+        const stats = await getMailboxStats(env);
+        const layoutOpts = { unreadCount: stats.unread, starCount: stats.starred };
 
         if (method === 'POST') {
             const fd = await request.formData();
@@ -2118,9 +2822,11 @@ async function handleRequest(request, env, ctx) {
                         { forwardEmail: next.forwardEmail, turnstileSiteKey: next.turnstileSiteKey, turnstileSecretKey: settings.turnstileSecretKey },
                         resolveTurnstile(settings, env),
                         resolveForwardEmail(settings, env),
-                        { error: 'Turnstile 的 Site Key 与 Secret Key 必须成对填写：要么都填，要么都不填。' }
+                        { error: 'Turnstile 的 Site Key 与 Secret Key 必须成对填写：要么都填，要么都不填。', stats: stats }
                     ),
-                    'settings'
+                    'settings',
+                    0,
+                    layoutOpts
                 ), 400);
             }
 
@@ -2135,8 +2841,10 @@ async function handleRequest(request, env, ctx) {
                 : (url.searchParams.get('pwchanged') ? '密码已更新，其它设备上的登录已失效。' : ''));
 
         return htmlResponse(renderLayout(
-            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice }),
-            'settings'
+            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice, stats: stats }),
+            'settings',
+            0,
+            layoutOpts
         ));
     }
 
@@ -2153,9 +2861,13 @@ async function handleRequest(request, env, ctx) {
     // 以前想改密码只能删掉 sys_config.json 重新初始化 —— 那会连带清掉全部配置和会话，太糙了。
     if (url.pathname === '/settings/password' && method === 'POST') {
         const settings = await getSettings(env);
+        const stats2 = await getMailboxStats(env);
         const back = (opts, status) => htmlResponse(renderLayout(
-            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), opts),
-            'settings'
+            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env),
+                Object.assign({}, opts, { stats: stats2 })),
+            'settings',
+            0,
+            { unreadCount: stats2.unread, starCount: stats2.starred }
         ), status);
 
         const fd = await request.formData();
@@ -2193,7 +2905,7 @@ async function handleRequest(request, env, ctx) {
             const obj = await env.MAIL_BUCKET.get(key);
             if (obj) { await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body); await env.MAIL_BUCKET.delete(key); }
         }
-        return Response.redirect(url.origin + '/', 302);
+        return Response.redirect(url.origin + '/?toast=' + encodeURIComponent('已移入回收站'), 302);
     }
     if (url.pathname === '/purge' && method === 'POST') {
         const fd = await request.formData();
@@ -2203,7 +2915,7 @@ async function handleRequest(request, env, ctx) {
             // 顺手清掉这封邮件缓存的译文，免得留下永远读不到的孤儿对象。
             await dropTranslationCache(env, key);
         }
-        return Response.redirect(url.origin + '/trash', 302);
+        return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent('已彻底删除'), 302);
     }
     if (url.pathname === '/restore' && method === 'POST') {
         const fd = await request.formData();
@@ -2212,53 +2924,76 @@ async function handleRequest(request, env, ctx) {
             const obj = await env.MAIL_BUCKET.get(key);
             if (obj) { await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body); await env.MAIL_BUCKET.delete(key); }
         }
-        return Response.redirect(url.origin + '/trash', 302);
+        return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent('已恢复到收件箱'), 302);
     }
 
     if (url.pathname === '/batch-action' && method === 'POST') {
         const fd = await request.formData();
         const keys = fd.getAll('keys');
         const action = fd.get('action');
+        let done = 0;
         for (const key of keys) {
             if (key === CONFIG_FILE) continue;
             if (action === 'delete') {
                 if (!key.startsWith(TRASH_PREFIX)) {
                     const obj = await env.MAIL_BUCKET.get(key);
-                    if (obj) { await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body); await env.MAIL_BUCKET.delete(key); }
+                    if (obj) { await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body); await env.MAIL_BUCKET.delete(key); done++; }
                 }
             } else if (action === 'purge') {
                 if (key.startsWith(TRASH_PREFIX)) {
                     await env.MAIL_BUCKET.delete(key);
                     await dropTranslationCache(env, key);
+                    done++;
                 }
             } else if (action === 'restore') {
                 if (key.startsWith(TRASH_PREFIX)) {
                     const obj = await env.MAIL_BUCKET.get(key);
-                    if (obj) { await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body); await env.MAIL_BUCKET.delete(key); }
+                    if (obj) { await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body); await env.MAIL_BUCKET.delete(key); done++; }
                 }
             } else if (action === 'mark_read' || action === 'mark_unread') {
                 if (!key.startsWith(TRASH_PREFIX)) {
                     const obj = await env.MAIL_BUCKET.get(key);
                     if (obj) {
+                        // ⚠️ 保留 isStarred 等已有元数据，不能只写 isRead
                         await env.MAIL_BUCKET.put(key, obj.body, {
                             customMetadata: Object.assign({}, obj.customMetadata, {
                                 isRead: action === 'mark_read' ? 'true' : 'false'
                             })
                         });
+                        done++;
+                    }
+                }
+            } else if (action === 'star' || action === 'unstar') {
+                if (!key.startsWith(TRASH_PREFIX)) {
+                    const obj = await env.MAIL_BUCKET.get(key);
+                    if (obj) {
+                        await env.MAIL_BUCKET.put(key, obj.body, {
+                            customMetadata: Object.assign({}, obj.customMetadata, {
+                                isStarred: action === 'star' ? 'true' : 'false'
+                            })
+                        });
+                        done++;
                     }
                 }
             }
         }
 
-        // 批量操作完成后回到用户刚才所在的页面（收件箱 / 回收站）。
+        // 批量操作完成后回到用户刚才所在的页面（收件箱 / 已加星标 / 回收站）。
         //
         // 这里不能用 Referer：
         //   1) 本站所有响应都带 Referrer-Policy: no-referrer，浏览器压根不会发 Referer；
         //   2) Response.redirect() 只接受**绝对 URL**，传相对路径会直接抛
         //      TypeError: Failed to parse URL from / —— 那就是「服务暂时不可用」的根因。
         // 改为由表单自带 next 字段，并做白名单校验，顺带杜绝开放重定向。
-        const next = String(fd.get('next') || '').indexOf('/trash') === 0 ? '/trash' : '/';
-        return Response.redirect(url.origin + next, 302);
+        const nextRaw = String(fd.get('next') || '');
+        const next = nextRaw.indexOf('/trash') === 0 ? '/trash' : (nextRaw === '/starred' ? '/starred' : '/');
+        const actionLabel = {
+            delete: '已移入回收站', purge: '已彻底删除', restore: '已恢复到收件箱',
+            mark_read: '已标记为已读', mark_unread: '已标记为未读',
+            star: '已加星标', unstar: '已取消星标'
+        }[action] || '操作完成';
+        const toastMsg = done > 0 ? (actionLabel + '（' + done + ' 封）') : '没有选中任何邮件';
+        return Response.redirect(url.origin + next + '?toast=' + encodeURIComponent(toastMsg), 302);
     }
 
     if (url.pathname.startsWith('/frame/')) {
@@ -2350,24 +3085,69 @@ async function handleRequest(request, env, ctx) {
 
         // 只读一次 body：R2ObjectBody 的流被消费后不能重复读取
         const buffer = await resolved.obj.arrayBuffer();
-        if (!resolved.isTrash && resolved.obj.customMetadata?.isRead !== 'true') {
-            ctx.waitUntil(env.MAIL_BUCKET.put(resolved.key, buffer, { customMetadata: { isRead: 'true' } }));
+        const meta0 = resolved.obj.customMetadata || {};
+        if (!resolved.isTrash && meta0.isRead !== 'true') {
+            // ⚠️ 必须保留已有 customMetadata（isStarred 等），不能只写 isRead ——
+            // 否则打开一封星标邮件就会悄悄抹掉它的星标。
+            ctx.waitUntil(env.MAIL_BUCKET.put(resolved.key, buffer, { customMetadata: Object.assign({}, meta0, { isRead: 'true' }) }));
         }
+
+        // 上一封 / 下一封：在同目录按时间排序后定位邻居；顺手算出侧栏徽标数
+        let prevKey = null, nextKey = null, dUnread = 0, dStar = 0;
+        try {
+            const dAll = await listAllObjects(env);
+            const dMails = (resolved.isTrash
+                ? dAll.filter(o => o.key.startsWith(TRASH_PREFIX))
+                : dAll.filter(o => isMailKey(o.key))
+            ).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
+            for (const m of dMails) {
+                const md = m.customMetadata || {};
+                if (!resolved.isTrash) {
+                    if (md.isRead !== 'true') dUnread++;
+                    if (md.isStarred === 'true') dStar++;
+                }
+            }
+            const di = dMails.findIndex(m => m.key === resolved.key);
+            if (di >= 0) {
+                if (di > 0) prevKey = dMails[di - 1].key;
+                if (di < dMails.length - 1) nextKey = dMails[di + 1].key;
+            }
+        } catch (e) {}
 
         const email = processEmail(bufferToBinaryString(buffer));
         return htmlResponse(renderLayout(
-            renderEmailDetail(email, resolved.key, resolved.isTrash, resolved.obj.uploaded),
-            resolved.isTrash ? 'trash' : 'inbox'
+            renderEmailDetail(email, resolved.key, resolved.isTrash, resolved.obj.uploaded, {
+                prevKey: prevKey,
+                nextKey: nextKey,
+                isStarred: meta0.isStarred === 'true',
+                isRead: resolved.isTrash || meta0.isRead === 'true'
+            }),
+            resolved.isTrash ? 'trash' : 'inbox',
+            0,
+            { unreadCount: dUnread, starCount: dStar }
         ));
     }
 
-    const isTrashPage = url.pathname === '/trash';
-    if (url.pathname === '/' || isTrashPage) {
-        // 翻页取全量、再排序截取 —— 直接 list({ limit: N }) 拿到的是**最旧的** N 封，
-        // 邮件一多新邮件就再也不显示了（详见 listAllObjects 上的说明）。
-        const all = await listAllObjects(env, { prefix: isTrashPage ? TRASH_PREFIX : '' });
-        const emails = isTrashPage ? all : all.filter(o => isMailKey(o.key));
-        emails.sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
+    const LIST_MODE = url.pathname === '/trash' ? 'trash' : (url.pathname === '/starred' ? 'starred' : (url.pathname === '/' ? 'inbox' : null));
+    if (LIST_MODE) {
+        const isTrashPage = LIST_MODE === 'trash';
+        const isStarredPage = LIST_MODE === 'starred';
+
+        // 一次列举、内存里分拣：收件箱 / 回收站 / 计数一次算完。
+        // （R2 list 按键名字典序返回，这里自己按时间戳重排；新邮件永远置顶。）
+        const all = await listAllObjects(env);
+        const inboxMails = all.filter(o => isMailKey(o.key)).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
+        const trashMails = all.filter(o => o.key.startsWith(TRASH_PREFIX)).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
+
+        let unreadCount = 0, starCount = 0;
+        for (const m of inboxMails) {
+            const md = m.customMetadata || {};
+            if (md.isRead !== 'true') unreadCount++;
+            if (md.isStarred === 'true') starCount++;
+        }
+
+        let emails = isTrashPage ? trashMails : inboxMails;
+        if (isStarredPage) emails = inboxMails.filter(o => (o.customMetadata || {}).isStarred === 'true');
 
         const displayKeyOf = o => (isTrashPage ? o.key.replace(TRASH_PREFIX, '') : o.key);
 
@@ -2391,91 +3171,69 @@ async function handleRequest(request, env, ctx) {
         const nextSize = Math.min(pageSize * 2, PAGE_SIZE_MAX);
         const hasMore = matched.length > shown.length;
 
-        // 未读计数（侧栏徽标）。已取到全量 metadata，顺手算出来，不额外开销。
-        const unreadCount = isTrashPage ? 0 : emails.filter(o => o.customMetadata?.isRead !== 'true').length;
-
-        const listHtml = shown.map(e => {
+        const rows = shown.map(e => {
             const fullKey = e.key;
             const displayKey = displayKeyOf(e);
-
             const meta = parseKeyMeta(displayKey);
             const senderName = (meta.from.includes('<')
                 ? meta.from.split('<')[0].replace(/"/g, '').trim()
                 : meta.from.trim()) || '未知发件人';
             const subject = meta.subject.trim() || '(无主题)';
-
             const color = getAvatarColor(senderName);
             const ts = keyTimestamp(displayKey);
+            const isRead = (e.customMetadata || {}).isRead === 'true';
+            const isStarred = (e.customMetadata || {}).isStarred === 'true';
+            // 主题与发件人完全由发件人控制，必须转义后才能拼进 HTML；
+            // data-key 走 encodeURIComponent + escapeAttr，行点击用事件委托（防 XSS）。
+            return {
+                fullKeyAttr: escapeAttr(fullKey),
+                dataKeyAttr: escapeAttr(encodeURIComponent(displayKey)),
+                senderName: escapeHtml(senderName),
+                subject: escapeHtml(subject),
+                ts: ts,
+                iso: ts > 0 ? escapeAttr(new Date(ts).toISOString()) : '',
+                isRead: isRead,
+                isStarred: isStarred,
+                avatarColor: color,
+                initial: escapeHtml((senderName[0] || '?').toUpperCase())
+            };
+        });
 
-            const isRead = e.customMetadata?.isRead === 'true';
-            const fontWeight = isRead ? 'font-normal' : 'font-semibold';
-            const textColor = isRead ? 'text-gray-600' : 'text-gray-900';
-            const dotHtml = !isRead && !isTrashPage ? '<span class="unread-dot"></span>' : '';
+        const titles = { inbox: '收件箱', starred: '已加星标', trash: '回收站' };
+        const emptyCfg = {
+            inbox: { icon: Icons.inbox, title: '暂无邮件', desc: '您的收件箱空空如也。新邮件到达时会自动出现在这里。' },
+            starred: { icon: Icons.star, title: '还没有加星标的邮件', desc: '把鼠标移到邮件行上（或点开邮件），点亮星标即可收藏到这里。' },
+            trash: { icon: Icons.trash, title: '回收站是空的', desc: '被删除的邮件会在这里保留，彻底删除后无法恢复。' }
+        }[LIST_MODE];
+        if (query) { emptyCfg.title = '没有匹配的邮件'; emptyCfg.desc = '换个关键词试试。搜索范围是主题与发件人。'; }
 
-            // 主题与发件人完全由发件人控制，必须转义后才能拼进 HTML。
-            // 行点击改成 data-key + 事件委托：原来拼进 onclick 单引号字符串里，
-            // 而 encodeURIComponent 不转义单引号，主题带一个单引号就能注入脚本。
-            return `
-            <div class="group email-row block bg-white hover:bg-gray-50 border-b border-gray-100 transition-all cursor-pointer relative select-none" data-key="${escapeAttr(encodeURIComponent(displayKey))}">
-                <div class="px-3 sm:px-6 py-3 sm:py-4 flex items-center">
-                    <div class="flex-shrink-0 mr-3 sm:mr-4 z-20 h-full flex items-center"><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" name="keys" value="${escapeAttr(fullKey)}" class="hidden" onchange="updateRowStyle(this)"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
-                    <div class="flex-shrink-0 mr-3 sm:mr-5"><div class="w-10 h-10 ${color} rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">${escapeHtml((senderName[0] || '?').toUpperCase())}</div></div>
-                    <div class="min-w-0 flex-1 flex flex-col justify-center">
-                        <div class="flex justify-between items-baseline mb-1">
-                            <p class="text-sm sm:text-base ${fontWeight} text-gray-900 truncate mr-2">${dotHtml}${escapeHtml(senderName)}</p>
-                            <time class="text-xs text-gray-400 whitespace-nowrap flex-shrink-0" data-ts="${ts}" datetime="${ts > 0 ? escapeAttr(new Date(ts).toISOString()) : ''}"></time>
-                        </div>
-                        <p class="text-sm ${textColor} truncate leading-snug"><span class="${fontWeight}">${escapeHtml(subject)}</span></p>
-                    </div>
-                </div></div>`;
-        }).join('');
-        const emptyState = `<div class="flex flex-col items-center justify-center text-center p-8 mt-20"><div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-4">${query ? Icons.search : (isTrashPage ? Icons.trash : Icons.inbox)}</div><h3 class="text-gray-900 font-medium text-lg">${query ? '没有匹配的邮件' : (isTrashPage ? '回收站是空的' : '暂无邮件')}</h3><p class="text-sm text-gray-500">${query ? '换个关键词试试。搜索范围是主题与发件人' : (isTrashPage ? '被删除的邮件将在此处保留' : '您的收件箱空空如也')}</p></div>`;
-        
-        const batchButtons = isTrashPage ? `
-            <button onclick="confirmBatch('restore')" class="flex items-center px-3 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]">${Icons.refresh} <span class="ml-1 hidden sm:inline">恢复</span></button>
-            <button onclick="confirmBatch('purge')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash} <span class="ml-1 hidden sm:inline">删除</span></button>` : `
-            <button onclick="confirmBatch('mark_read')" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium mr-1 whitespace-nowrap transition active:scale-[0.98]" title="标记为已读">${Icons.read}</button>
-            <button onclick="confirmBatch('mark_unread')" class="flex items-center px-3 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-lg text-sm font-medium mr-2 whitespace-nowrap transition active:scale-[0.98]" title="标记为未读">${Icons.unread}</button>
-            <button onclick="confirmBatch('delete')" class="flex items-center px-3 py-2 bg-red-50 text-red-700 hover:bg-red-100 rounded-lg text-sm font-medium whitespace-nowrap transition active:scale-[0.98]">${Icons.trash}</button>`;
-
-        const latestTimestamp = emails.length > 0 ? keyTimestamp(emails[0].key) : 0;
-
-        const searchAction = isTrashPage ? '/trash' : '/';
-        const searchBar = `
-            <form method="GET" action="${searchAction}" class="px-3 sm:px-6 py-2.5 border-b border-gray-100 bg-white shrink-0 flex items-center gap-2">
-                <div class="relative flex-1 min-w-0">
-                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400 pointer-events-none">${Icons.search}</span>
-                    <input type="search" name="q" value="${escapeAttr(query)}" autocomplete="off" placeholder="搜索主题或发件人" class="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 outline-none focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all">
-                </div>
-                <button type="submit" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors active:scale-[0.98]">搜索</button>
-                ${query ? `<a href="${searchAction}" class="px-3 py-2 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-100 transition-colors">清除</a>` : ''}
-            </form>`;
-
+        const searchAction = LIST_MODE === 'trash' ? '/trash' : (LIST_MODE === 'starred' ? '/starred' : '/');
         const countLine = query
-            ? `找到 ${matched.length} 封匹配「${query}」的邮件`
-            : `共 ${emails.length} 封邮件`;
-        const shownLine = hasMore ? `，当前显示最新 ${shown.length} 封` : '';
-
-        // 「加载更多」用 URL 递进而不是一次渲染全部：
-        // 邮件上千封时把 DOM 全铺出来会明显卡顿，而分页的成本几乎为零。
+            ? ('找到 ' + matched.length + ' 封匹配「' + query + '」的邮件')
+            : ('共 ' + emails.length + ' 封邮件' + (hasMore ? '，当前显示最新 ' + shown.length + ' 封' : ''));
         const nextHref = searchAction + '?limit=' + nextSize + (query ? '&q=' + encodeURIComponent(query) : '');
-        const footer = !hasMore ? '' : (nextSize > pageSize
-            ? `<div class="px-4 py-5 text-center"><a href="${escapeAttr(nextHref)}" class="inline-block px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors">加载更多（还有 ${matched.length - shown.length} 封）</a></div>`
-            : `<div class="px-4 py-5 text-center text-xs text-gray-400">仅显示前 ${PAGE_SIZE_MAX} 封，请用搜索缩小范围</div>`);
 
-        const html = `
-        <div class="flex flex-col h-full bg-white md:rounded-xl md:shadow-lg overflow-hidden">
-            <div class="h-14 sm:h-16 px-3 sm:px-6 border-b border-gray-100 flex items-center justify-between bg-white shrink-0 z-20 sticky top-0 shadow-sm">
-                <div class="flex items-center w-full">
-                     <div class="mr-3 sm:mr-4 flex items-center"><button onclick="toggleMenu()" class="md:hidden mr-3 text-gray-500 p-1 -ml-2 rounded-full hover:bg-gray-100 active:scale-95">${Icons.menu}</button><label class="custom-checkbox cursor-pointer flex items-center justify-center w-6 h-6 sm:w-5 sm:h-5"><input type="checkbox" onclick="toggleAll(this)" class="hidden"><div class="w-5 h-5 border-2 border-gray-300 rounded-md bg-white flex items-center justify-center transition-colors hover:border-indigo-400"><svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"></path></svg></div></label></div>
-                    <div id="default-header" class="flex items-center justify-between w-full"><h1 class="text-lg sm:text-xl font-bold text-gray-800">${isTrashPage ? '回收站' : '收件箱'}</h1><div class="flex items-center gap-1"><a href="/settings" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="设置">${Icons.gear}</a><button onclick="window.location.reload()" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95" title="刷新">${Icons.refresh}</button></div></div>
-                    <div id="action-header" class="hidden flex items-center justify-between w-full"><span class="text-sm text-gray-600 font-medium whitespace-nowrap mr-2">已选 <span id="selected-count" class="text-indigo-600 font-bold">0</span></span><div class="flex items-center">${batchButtons}</div></div>
-                </div>
-            </div>
-            ${searchBar}
-            <form id="batch-form" method="POST" action="/batch-action" class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain custom-scrollbar bg-white safe-bottom"><input type="hidden" name="next" value="${isTrashPage ? '/trash' : '/'}"><div class="px-3 sm:px-6 py-2 text-xs text-gray-400 border-b border-gray-50 bg-white">${escapeHtml(countLine + shownLine)}</div>${shown.length > 0 ? listHtml : emptyState}${footer}</form>
-        </div>`;
-        return htmlResponse(renderLayout(html, isTrashPage ? 'trash' : 'inbox', latestTimestamp, { unreadCount: unreadCount }));
+        // 收件箱首页轮询新邮件用：最新一封的时间戳
+        const latestTimestamp = LIST_MODE === 'inbox' && inboxMails.length > 0 ? keyTimestamp(inboxMails[0].key) : 0;
+
+        const html = renderMailListPage({
+            mode: LIST_MODE,
+            title: titles[LIST_MODE],
+            countLine: escapeHtml(countLine),
+            queryAttr: escapeAttr(query),
+            query: query,
+            searchAction: searchAction,
+            nextValue: searchAction,
+            rows: rows,
+            empty: { icon: emptyCfg.icon, title: escapeHtml(emptyCfg.title), desc: escapeHtml(emptyCfg.desc) },
+            hasMore: hasMore,
+            nextHrefAttr: escapeAttr(nextHref),
+            remaining: matched.length - shown.length,
+            showMarkAllRead: LIST_MODE === 'inbox' && unreadCount > 0
+        });
+        return htmlResponse(renderLayout(html, LIST_MODE, latestTimestamp, {
+            unreadCount: unreadCount, starCount: starCount, trashCount: trashMails.length
+        }));
     }
     return textResponse('Not Found', 404);
 }
@@ -2493,7 +3251,7 @@ export default {
         } catch (e) {
             // 不把异常细节回显给客户端（会泄漏内部结构），完整堆栈只进日志
             console.error('Request failed:', e && e.stack ? e.stack : e);
-            return htmlResponse('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>服务异常</title><script src="https://cdn.tailwindcss.com"></script></head><body class="h-screen flex items-center justify-center bg-gray-50"><div class="text-center p-8"><h1 class="text-2xl font-bold text-gray-900 mb-2">服务暂时不可用</h1><p class="text-gray-500 text-sm">请稍后重试。若持续出现，请查看 Worker 日志（Dashboard 的 Logs 页或 wrangler tail）。</p></div></body></html>', 500);
+            return htmlResponse('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>服务异常 · CF Mail</title><script src="https://cdn.tailwindcss.com"></script><style>' + THEME_CSS + '</style></head><body style="min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:1.5rem"><div class="card" style="max-width:26rem;width:100%;padding:2.5rem 2rem;text-align:center"><div class="empty-icon" style="margin:0 auto 1.2rem;color:var(--danger)">' + Icons.alert + '</div><h1 style="font-size:1.3rem;font-weight:800;margin-bottom:.5rem">服务暂时不可用</h1><p style="font-size:.87rem;color:var(--text-2);line-height:1.7">请稍后重试。若持续出现，请查看 Worker 日志（Dashboard 的 Logs 页或 wrangler tail）。</p><a href="/" class="btn btn-primary" style="margin-top:1.5rem">返回收件箱</a></div></body></html>', 500);
         }
     },
 
