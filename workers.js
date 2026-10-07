@@ -55,18 +55,21 @@ const TRANSLATE_MODEL = '@cf/meta/m2m100-1.2b';
 const TRANSLATE_TARGET = 'chinese';
 // 该模型只支持这 10 种语言（取自模型元数据），不在列表里的语种只能明确报错，不能硬翻。
 const TRANSLATE_LANGS = ['english', 'chinese', 'french', 'spanish', 'arabic', 'russian', 'german', 'japanese', 'portuguese', 'hindi'];
-// 分段翻译：单次请求塞太长会被模型截断，按段落切开分别翻再拼回去。
+// 分段翻译：单个片段太长会被模型截断，按段落切开分别翻再按顺序拼回去。
 const TRANSLATE_CHUNK_SIZE = 2500;
 const TRANSLATE_MAX_CHUNKS = 6;
 
-// 「就地翻译」的分批参数。
-// 做法是把多个文本片段用换行拼成一批、一次 AI 调用翻完，再按行拆回去 —— 比逐片段调用省得多。
-//   TRANSLATE_BATCH_CHARS     一批最多多少字符（避免被模型截断）
-//   TRANSLATE_MAX_BATCHES     单次请求最多几次 AI 调用（免费版 Workers 有子请求上限，必须收敛）
-//   TRANSLATE_BATCH_CONCURRENCY  并行批次数量
-const TRANSLATE_BATCH_CHARS = 1200;
-const TRANSLATE_MAX_BATCHES = 20;
-const TRANSLATE_BATCH_CONCURRENCY = 4;
+// 「就地翻译」的并发与预算参数。
+//
+// ⚠️ 这里**刻意不做「多片段拼成一批、一次翻完」**的优化，原因见 translateHtmlPreservingLayout 的注释：
+//    那套做法依赖 m2m100 按行返回，而它是句级 seq2seq 模型，对多行输入经常改变行数，
+//    一旦对不上就整批作废 —— 普通邮件的片段往往正好全在一批里，于是整篇都翻不出来。
+// 现在逐片段翻译，用这两个参数控制开销：
+//   TRANSLATE_CONCURRENCY  并行度。Workers 单次调用最多 6 条并发出站连接（R2 也要占），所以留余量。
+//   TRANSLATE_MAX_CALLS    单次请求的 AI 调用总预算。免费版子请求额度是 50，这里留足余量。
+//                          超出预算的片段保持原文，并在状态条上如实告知，而不是让整个请求超时。
+const TRANSLATE_CONCURRENCY = 4;
+const TRANSLATE_MAX_CALLS = 48;
 
 // 译文缓存前缀。译文按「原文的 HTML」整篇缓存，再次切换原文/译文时直接命中，不重复计费。
 // 放在 _sys/ 下，天然不会出现在邮件列表里。
@@ -908,38 +911,56 @@ function isTranslatableText(core) {
     return /[A-Za-z\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u0900-\u097f\u0e00-\u0e7f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(core);
 }
 
-// 翻译一个「纯文本片段」，保留其首尾空白（空白往往承担着 HTML 里的分词作用）。
+// 翻译一个「纯文本片段」。
+// 片段超过 TRANSLATE_CHUNK_SIZE 时按段落切成最多 TRANSLATE_MAX_CHUNKS 段，**顺序**翻译后拼回。
+// 这里刻意串行而非 Promise.all：外层已有并发池，再叠加一层会突破
+// Workers「单次调用最多 6 条并发出站连接」的限制。分段只发生在超长片段上，串行代价可接受。
 async function translateCoreText(env, core, source) {
     const split = splitForTranslation(core, TRANSLATE_CHUNK_SIZE, TRANSLATE_MAX_CHUNKS);
     if (split.chunks.length === 0) return '';
-    const parts = await Promise.all(split.chunks.map(chunk =>
-        env.AI.run(TRANSLATE_MODEL, { text: chunk, source_lang: source, target_lang: TRANSLATE_TARGET })
-    ));
-    return parts.map(pickTranslatedText).join('\n\n').trim();
-}
-
-// 翻一批片段：用换行拼成一段文本一次翻完，再按行拆回。
-// ⚠️ 行数对不上就**整批放弃**（返回 null，片段保持原文）。
-//    宁可少翻几个片段，也绝不能把译文错位到别的元素上 —— 错位比重译难查得多。
-async function translateBatchLines(env, batch, source) {
-    if (batch.length === 1) {
-        const only = await translateCoreText(env, batch[0].core, source);
-        return only ? [only] : null;
+    const out = [];
+    for (const chunk of split.chunks) {
+        const res = await env.AI.run(TRANSLATE_MODEL, {
+            text: chunk, source_lang: source, target_lang: TRANSLATE_TARGET
+        });
+        const text = pickTranslatedText(res);
+        // 任何一段没翻出来就整段放弃（返回空串），避免译文里混进半截原文。
+        if (!text) return '';
+        out.push(text);
     }
-    const res = await env.AI.run(TRANSLATE_MODEL, {
-        text: batch.map(t => t.core).join('\n'),
-        source_lang: source,
-        target_lang: TRANSLATE_TARGET
-    });
-    const text = pickTranslatedText(res);
-    if (!text) return null;
-    const lines = text.split('\n').map(l => l.trim());
-    if (lines.length !== batch.length) return null;
-    return lines;
+    return out.join('\n\n').trim();
 }
 
-// 主流程：tokenize → 挑出可翻片段 → 分批并行翻译 → 按原位置拼回。
-// 返回 { html, segments, skipped, truncated }。全部片段都翻失败时抛错，由上层报「翻译失败」。
+// 固定并发的任务池。单项抛错只记录、不中断其它项。
+async function runPool(items, lanes, worker) {
+    let cursor = 0;
+    const n = Math.max(1, Math.min(lanes, items.length));
+    const runners = [];
+    for (let i = 0; i < n; i++) {
+        runners.push((async () => {
+            for (;;) {
+                const idx = cursor++;
+                if (idx >= items.length) return;
+                try { await worker(items[idx], idx); } catch (e) { /* 单项失败不影响其它 */ }
+            }
+        })());
+    }
+    await Promise.all(runners);
+}
+
+// 主流程：tokenize → 挑出可翻片段 → 去重 → 并发逐段翻译 → 按原位置拼回。
+//
+// ⚠️ 为什么**不**把多个片段拼成一批、一次翻完？
+//    试过：用换行拼接后送进 m2m100，指望它按行返回、再按行拆回。这条路走不通 ——
+//    m2m100 是句级 seq2seq 模型，对多行输入经常合并或改变行数；行数一旦对不上，
+//    为了不让译文错位就只能整批作废。而普通邮件的片段往往正好全部落进同一批，
+//    于是「一批作废」= 整篇一个字都没翻出来，用户看到的就是「翻译失败，请稍后重试」。
+//    现在改成逐片段翻译：不依赖模型保留任何结构，稳定性高得多。
+//    调用量用两个办法压住：① 相同片段去重（营销邮件里重复的按钮文字只翻一次）；
+//    ② 设总调用预算，超出预算的片段保持原文并如实上报，而不是让整个请求超时。
+//
+// 返回 { html, segments, skipped, truncated }。
+// 一个片段都没翻出来时抛错（带 reason），由上层给出可读原因。
 async function translateHtmlPreservingLayout(env, html, source) {
     const tokens = tokenizeHtml(String(html || ''));
 
@@ -960,42 +981,43 @@ async function translateHtmlPreservingLayout(env, html, source) {
         return { html: tokens.map(t => t.raw).join(''), segments: 0, skipped: 0, truncated: false };
     }
 
-    // 按字符数切批；批次数受 TRANSLATE_MAX_BATCHES 约束，避免超出子请求上限。
-    const batches = [];
-    let cur = [], curLen = 0;
+    // 去重：同文片段只翻一次，结果回填给所有副本。
+    const groups = new Map();
     for (const t of targets) {
-        if (batches.length >= TRANSLATE_MAX_BATCHES) break;
-        if (cur.length && curLen + t.core.length > TRANSLATE_BATCH_CHARS) { batches.push(cur); cur = []; curLen = 0; }
-        cur.push(t); curLen += t.core.length + 1;
+        let g = groups.get(t.core);
+        if (!g) { g = { core: t.core, tokens: [] }; groups.set(t.core, g); }
+        g.tokens.push(t);
     }
-    if (cur.length && batches.length < TRANSLATE_MAX_BATCHES) batches.push(cur);
 
-    // 并行跑批次（固定并发，避免一次性打出几十个请求）。
-    let cursor = 0;
-    const lanes = Math.min(TRANSLATE_BATCH_CONCURRENCY, batches.length);
-    const runners = [];
-    for (let i = 0; i < lanes; i++) {
-        runners.push((async () => {
-            for (;;) {
-                const idx = cursor++;
-                if (idx >= batches.length) return;
-                const batch = batches[idx];
-                try {
-                    const lines = await translateBatchLines(env, batch, source);
-                    if (!lines) continue;
-                    for (let k = 0; k < batch.length; k++) {
-                        if (lines[k]) batch[k].translated = lines[k];
-                    }
-                } catch (e) {
-                    console.error('Translate batch failed:', e && e.stack ? e.stack : e);
-                }
-            }
-        })());
+    // 按**文档顺序**取前 N 个不重复片段：保证从上往下优先翻译，观感最自然。
+    const planned = [];
+    const seen = new Set();
+    for (const t of targets) {
+        if (seen.has(t.core)) continue;
+        seen.add(t.core);
+        if (planned.length >= TRANSLATE_MAX_CALLS) break;
+        planned.push(groups.get(t.core));
     }
-    await Promise.all(runners);
+
+    const failures = [];
+    await runPool(planned, TRANSLATE_CONCURRENCY, async (g) => {
+        try {
+            const text = await translateCoreText(env, g.core, source);
+            if (!text) { failures.push('empty-output'); return; }
+            for (const t of g.tokens) t.translated = text;
+        } catch (e) {
+            failures.push(String((e && e.message) || e).slice(0, 160));
+            console.error('Translate segment failed:', e && e.stack ? e.stack : e);
+        }
+    });
 
     const done = targets.filter(t => typeof t.translated === 'string').length;
-    if (done === 0) throw new Error('translation produced no output');
+    if (done === 0) {
+        const err = new Error('translation produced no output');
+        err.reason = failures.length ? failures[0] : 'no-output';
+        err.attempted = planned.length;
+        throw err;
+    }
 
     let out = '';
     for (const t of tokens) {
@@ -1009,6 +1031,21 @@ async function translateHtmlPreservingLayout(env, html, source) {
         skipped: targets.length - done,
         truncated: targets.length - done > 0
     };
+}
+
+// 把底层错误翻成用户看得懂、能行动的一句话。
+// 免费版 Workers AI 每天有 10,000 Neurons 额度，用尽后所有调用都会失败 ——
+// 这正好是「昨天还能翻、今天突然不行」最常见的原因，必须点名，而不是笼统说「翻译失败」。
+function describeTranslateFailure(reason) {
+    const r = String(reason || '');
+    if (!r || r === 'empty-output' || r === 'no-output') return '模型没有返回内容，请稍后重试';
+    if (/neuron|quota|exceed|rate|limit|429|too many|capacity/i.test(r)) {
+        return 'Workers AI 额度可能已用尽或触发限流，请稍后重试（免费版每天 10,000 Neurons）';
+    }
+    if (/not found|no such|binding|unauthor|forbidden|invalid model/i.test(r)) {
+        return 'Workers AI 绑定或模型不可用，请检查 wrangler.jsonc 的 ai 绑定后重新部署';
+    }
+    return '模型返回错误：' + r;
 }
 
 // 译文缓存的键：对邮件键名取哈希，避免超长键名；去掉 trash/ 前缀让收件箱与回收站共用一份译文。
@@ -1855,7 +1892,7 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 translated = true;
                 if (frame) frame.src = TRANSLATED_SRC;
                 var note = '已按原文版式就地翻译　·　源语言：' + data.sourceLang;
-                if (data.truncated) note += '　·　另有 ' + data.skipped + ' 个片段超出上限，保留原文';
+                if (data.truncated) note += '　·　另有 ' + data.skipped + ' 个片段保留原文（超出预算或未翻出）';
                 setStatus(note, 'info');
                 setLabel(btn, '显示原文');
             }).catch(function () {
@@ -2050,7 +2087,8 @@ async function handleRequest(request, env, ctx) {
             });
         } catch (e) {
             console.error('Translate failed:', e && e.stack ? e.stack : e);
-            return jsonResponse({ ok: false, error: '翻译失败，请稍后重试' }, 502);
+            // 不笼统地说「翻译失败」：把底层原因分类后回显，用户才知道该等一等还是该去查绑定。
+            return jsonResponse({ ok: false, error: describeTranslateFailure(e && e.reason) }, 502);
         }
     }
 
