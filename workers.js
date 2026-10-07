@@ -2632,8 +2632,12 @@ async function bumpCounts(env, d) {
     if (touched) await putCounts(env, c);
     return c;
 }
-// 限流并发：Workers 单次调用出站连接数有限，R2 批量操作 5 路并行。
-// （顺序 for+await 在批量删 50 封时是 100 次串行 R2 调用，慢一个数量级。）
+// 批量并发：R2 子请求并行能力很强，25 路并发；
+// Workers 单次调用子请求上限约 1000，超大批量按 chunk 切分兜底。
+// （顺序 for+await 在批量删 50 封时是 150 次串行 R2 调用，慢一个数量级；
+//   之前 5 路限流太保守，25 路 + 批量删除后只剩 2~3 波往返。）
+const BATCH_CONCURRENCY = 25;
+const BATCH_CHUNK = 120;
 async function eachLimit(items, limit, fn) {
     const ret = new Array(items.length);
     let i = 0;
@@ -2648,6 +2652,26 @@ async function eachLimit(items, limit, fn) {
     for (let w = 0; w < n; w++) workers.push(worker());
     await Promise.all(workers);
     return ret;
+}
+// 分块高并发：每 120 个一切分，块内 25 路并行。
+// 单块最多约 120×3=360 个子请求，远低于单次调用上限；邮件正文是流式转发的，不占内存。
+async function eachChunk(items, fn) {
+    const out = [];
+    for (let s = 0; s < items.length; s += BATCH_CHUNK) {
+        const part = await eachLimit(items.slice(s, s + BATCH_CHUNK), BATCH_CONCURRENCY, fn);
+        for (const r of part) out.push(r);
+    }
+    return out;
+}
+// 批量删除：R2 binding 支持一次删除多个键，N 次 DELETE 合并成 1 个子请求。
+// 按 1000 切分兼容批量上限；删除幂等，不存在的键直接忽略。
+async function bulkDelete(env, keys) {
+    for (let s = 0; s < keys.length; s += 1000) {
+        const chunk = keys.slice(s, s + 1000);
+        if (!chunk.length) continue;
+        try { await env.MAIL_BUCKET.delete(chunk); }
+        catch (e) { for (const k of chunk) { try { await env.MAIL_BUCKET.delete(k); } catch (e2) {} } }
+    }
 }
 
 async function handleRequest(request, env, ctx) {
@@ -2870,7 +2894,7 @@ async function handleRequest(request, env, ctx) {
         return jsonResponse({ ok: true, star: meta.isStarred === 'true', read: meta.isRead !== 'false', starCount: counts.starred });
     }
 
-    // ---------- 全部标记为已读（5 路并发） ----------
+    // ---------- 全部标记为已读（25 路并发 + 分块） ----------
     if (url.pathname === '/mark-all-read' && method === 'POST') {
         const fd = await request.formData();
         const back = String(fd.get('next') || '') === '/starred' ? '/starred' : '/';
@@ -2880,12 +2904,15 @@ async function handleRequest(request, env, ctx) {
             if ((o.customMetadata || {}).isRead === 'true') continue;
             targets.push(o.key);
         }
-        await eachLimit(targets, 5, async (key) => {
-            const obj = await env.MAIL_BUCKET.get(key);
-            if (!obj) return;
-            await env.MAIL_BUCKET.put(key, obj.body, {
-                customMetadata: Object.assign({}, obj.customMetadata, { isRead: 'true' })
-            });
+        // 25 路并发 + 分块：之前 5 路，200 封未读要 80 波往返，现在 8 波；单封失败不影响整批
+        await eachChunk(targets, async (key) => {
+            try {
+                const obj = await env.MAIL_BUCKET.get(key);
+                if (!obj) return;
+                await env.MAIL_BUCKET.put(key, obj.body, {
+                    customMetadata: Object.assign({}, obj.customMetadata, { isRead: 'true' })
+                });
+            } catch (e) {}
         });
         // 全部已读后未读数直接清零，不用重算
         const c = (await getCounts(env)) || (await refreshCounts(env));
@@ -2895,14 +2922,16 @@ async function handleRequest(request, env, ctx) {
         return Response.redirect(url.origin + back + '?toast=' + encodeURIComponent(msg), 302);
     }
 
-    // ---------- 清空回收站（5 路并发） ----------
+    // ---------- 清空回收站（批量删除：N 封只用 2~3 个子请求） ----------
     if (url.pathname === '/purge-all' && method === 'POST') {
         const keys = [];
         for (const o of await listAllObjects(env, { prefix: TRASH_PREFIX })) keys.push(o.key);
-        await eachLimit(keys, 5, async (key) => {
-            await env.MAIL_BUCKET.delete(key);
-            await dropTranslationCache(env, key);
+        // 译文缓存键是本地算出来的（sha256），同样批量删，不用逐封 R2 查询
+        const cacheKeys = await eachChunk(keys, async (key) => {
+            try { return await translationCacheKey(key); } catch (e) { return null; }
         });
+        await bulkDelete(env, keys);
+        await bulkDelete(env, cacheKeys.filter(k => k));
         if (keys.length) await bumpCounts(env, { trash: -keys.length });
         const msg = keys.length > 0 ? ('已清空回收站（' + keys.length + ' 封）') : '回收站已经是空的';
         return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent(msg), 302);
@@ -3014,7 +3043,8 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === '/delete' && method === 'POST') {
         const fd = await request.formData();
         const key = fd.get('key');
-        if (key && !key.startsWith(TRASH_PREFIX) && key !== CONFIG_FILE) {
+        // _sys/ 系统键永不参与删除：防伪造表单删掉计数缓存等内部文件
+        if (key && !key.startsWith(TRASH_PREFIX) && key !== CONFIG_FILE && !String(key).startsWith(SYS_PREFIX)) {
             const obj = await env.MAIL_BUCKET.get(key);
             if (obj) {
                 const md = obj.customMetadata || {};
@@ -3062,10 +3092,13 @@ async function handleRequest(request, env, ctx) {
 
     if (url.pathname === '/batch-action' && method === 'POST') {
         const fd = await request.formData();
-        const keys = fd.getAll('keys').filter(k => k && k !== CONFIG_FILE);
+        // _sys/ 系统键永不参与批量操作：防伪造表单删掉计数缓存等内部文件
+        const keys = fd.getAll('keys').filter(k => k && k !== CONFIG_FILE && !String(k).startsWith(SYS_PREFIX));
         const action = fd.get('action');
         const totals = { total: 0, unread: 0, starred: 0, trash: 0 };
         let done = 0;
+        const movedSources = [];  // 移动成功后的源键：第二阶段一次批量删除
+        const purgeKeys = [];     // 彻底删除的键：第二阶段一次批量删除
 
         // 单封处理函数：返回 { ok, d }，d 为该封邮件带来的计数变化。
         // 移动（删除/恢复）时保留 customMetadata，原实现会丢已读/星标状态。
@@ -3078,17 +3111,15 @@ async function handleRequest(request, env, ctx) {
                 const obj = await env.MAIL_BUCKET.get(key);
                 if (!obj) return { ok: false, d };
                 const md = obj.customMetadata || {};
+                // 第一阶段只做 GET→PUT，源键留到第二阶段一次批量删除（N 次 DELETE → 1 个子请求）
                 await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body, { customMetadata: Object.assign({}, md) });
-                await env.MAIL_BUCKET.delete(key);
                 d.total = -1; d.trash = 1; d.unread = -wasUnread(md); d.starred = -wasStarred(md);
-                return { ok: true, d };
+                return { ok: true, d, src: key };
             }
             if (action === 'purge') {
                 if (!key.startsWith(TRASH_PREFIX)) return { ok: false, d };
-                await env.MAIL_BUCKET.delete(key);
-                await dropTranslationCache(env, key);
                 d.trash = -1;
-                return { ok: true, d };
+                return { ok: true, d, purge: key };
             }
             if (action === 'restore') {
                 if (!key.startsWith(TRASH_PREFIX)) return { ok: false, d };
@@ -3096,9 +3127,8 @@ async function handleRequest(request, env, ctx) {
                 if (!obj) return { ok: false, d };
                 const md = obj.customMetadata || {};
                 await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body, { customMetadata: Object.assign({}, md) });
-                await env.MAIL_BUCKET.delete(key);
                 d.total = 1; d.trash = -1; d.unread = wasUnread(md); d.starred = wasStarred(md);
-                return { ok: true, d };
+                return { ok: true, d, src: key };
             }
             if (action === 'mark_read' || action === 'mark_unread') {
                 if (key.startsWith(TRASH_PREFIX)) return { ok: false, d };
@@ -3127,12 +3157,29 @@ async function handleRequest(request, env, ctx) {
             return { ok: false, d };
         };
 
-        // 5 路并发：原来是 for+await 串行，50 封就是 100+ 次串行 R2 调用
-        const results = await eachLimit(keys, 5, applyOne);
+        // 两阶段批量：第一阶段 25 路并发只做 GET→PUT（移动/改标记），不逐封 DELETE；
+        // 25 封批量删从 15 波往返降到 3 波（GET 波 + PUT 波 + 1 次批量 DELETE）。
+        // 单封失败只记 ok:false，不让整批 500。
+        const safeApply = async (key) => {
+            try { return await applyOne(key); }
+            catch (e) { return { ok: false, d: { total: 0, unread: 0, starred: 0, trash: 0 } }; }
+        };
+        const results = await eachChunk(keys, safeApply);
         for (const r of results) {
-            if (!r.ok) continue;
+            if (!r || !r.ok) continue;
             done++;
             for (const k of ['total', 'unread', 'starred', 'trash']) totals[k] += r.d[k];
+            if (r.src) movedSources.push(r.src);
+            if (r.purge) purgeKeys.push(r.purge);
+        }
+        // 第二阶段：源键一次批量删除（N 次 DELETE → 1 个子请求）
+        await bulkDelete(env, movedSources.concat(purgeKeys));
+        // 彻底删除的邮件顺手清译文缓存（缓存键本地可算，同样批量删）
+        if (purgeKeys.length) {
+            const cacheKeys = await eachChunk(purgeKeys, async (k) => {
+                try { return await translationCacheKey(k); } catch (e) { return null; }
+            });
+            await bulkDelete(env, cacheKeys.filter(k => k));
         }
         if (done) await bumpCounts(env, totals);
 
