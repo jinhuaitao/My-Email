@@ -59,6 +59,19 @@ const TRANSLATE_LANGS = ['english', 'chinese', 'french', 'spanish', 'arabic', 'r
 const TRANSLATE_CHUNK_SIZE = 2500;
 const TRANSLATE_MAX_CHUNKS = 6;
 
+// 「就地翻译」的分批参数。
+// 做法是把多个文本片段用换行拼成一批、一次 AI 调用翻完，再按行拆回去 —— 比逐片段调用省得多。
+//   TRANSLATE_BATCH_CHARS     一批最多多少字符（避免被模型截断）
+//   TRANSLATE_MAX_BATCHES     单次请求最多几次 AI 调用（免费版 Workers 有子请求上限，必须收敛）
+//   TRANSLATE_BATCH_CONCURRENCY  并行批次数量
+const TRANSLATE_BATCH_CHARS = 1200;
+const TRANSLATE_MAX_BATCHES = 20;
+const TRANSLATE_BATCH_CONCURRENCY = 4;
+
+// 译文缓存前缀。译文按「原文的 HTML」整篇缓存，再次切换原文/译文时直接命中，不重复计费。
+// 放在 _sys/ 下，天然不会出现在邮件列表里。
+const TRANSLATION_CACHE_PREFIX = SYS_PREFIX + 'trans/';
+
 // ==========================================
 // 1. PWA & UI 资源
 // ==========================================
@@ -310,31 +323,121 @@ function decodeContent(str, encoding, charset = 'utf-8') {
 //   charset 不含 "_"（UTF-8 / ISO-8859-1 / GB2312 / windows-1252 …）
 //   content 不含 "_"（base64 字母表是 A-Za-z0-9+/=，quoted-printable 是 =XX）
 // 这两点保证了 "_" 可以安全地当作分隔符来切分。
+// 【核心修复 · 主题乱编 3/4】编码内容的字符集里必须允许 "_"，而且结尾要靠结构扫描来定位。
+//
+// Q 编码用 "_" 表示空格（见 decodeEncodedWord），而老版本把 "?" 也清洗成了 "_"，
+// 于是含空格的中文主题在旧键名里长这样：
+//     =_GB2312_Q_=D6=D0_=CE=C4_=
+// 这里有两个坑，只靠一条正则都躲不过：
+//   ① 内容字符集若不含 "_"，匹配到 "=D6=D0" 就被迫收尾 → 还原出半截编码词，主题显示成 "中CE=C4"；
+//   ② 若简单地把 "_" 并进字符集并贪婪匹配，又会把结尾的 "_=" 里的 "=" 一起吃进内容
+//      → 译文末尾凭空多出一个 "="（实测发件人变成 "中 文 = <a@b.com>"）。
+// 根因是 Q 编码里 "_" 同时承担「空格」和「分隔符」两种角色，本身就有歧义。
+// 可靠的判据是：内容里的 "=" 一定是 "=XX"（后跟两位十六进制字节），而结尾 "?=" 的 "=" 后面不是。
+// 因此改成手工扫描：先用正则锚定 "=_charset_type_"，再往后找第一个「后面不是两位十六进制」的 "_="。
+function findEncodedWordEnd(text, start, type) {
+    if (type.toUpperCase() === 'B') {
+        // base64 字母表不含 "_"，第一个 "_=" 就是结尾
+        const at = text.indexOf('_=', start);
+        return at;
+    }
+    for (let i = start; i < text.length - 1; i++) {
+        if (text[i] !== '_' || text[i + 1] !== '=') continue;
+        const a = text.charAt(i + 2), b = text.charAt(i + 3);
+        if (/[0-9A-Fa-f]/.test(a) && /[0-9A-Fa-f]/.test(b)) continue; // 这是内容里的 "=XX"
+        return i;
+    }
+    return -1;
+}
+
 function salvageBrokenRfc2047(text) {
     if (!text || text.indexOf('=_') === -1) return text;
-    return text.replace(
-        /=_([A-Za-z0-9][A-Za-z0-9.*-]*)_([BbQq])_([A-Za-z0-9+/=]+)_=?/g,
-        (_, charset, type, content) => '=?' + charset + '?' + type.toUpperCase() + '?' + content + '?='
-    );
+    const headRe = /^=_([A-Za-z0-9][A-Za-z0-9.*-]*)_([BbQq])_/;
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+        if (text[i] === '=' && text[i + 1] === '_') {
+            const head = headRe.exec(text.slice(i));
+            if (head) {
+                const contentStart = i + head[0].length;
+                const end = findEncodedWordEnd(text, contentStart, head[2]);
+                if (end !== -1) {
+                    out += '=?' + head[1] + '?' + head[2].toUpperCase() + '?' + text.slice(contentStart, end) + '?=';
+                    i = end + 2; // 跳过结尾的 "_="
+                    continue;
+                }
+            }
+        }
+        out += text[i];
+        i++;
+    }
+    return out;
+}
+
+// 【核心修复 · 主题乱编 1/4】RFC 2047 编码词里的 Q 编码有个极易被忽略的规则：
+// 字面下划线 "_" 代表**空格**（RFC 2047 §4.2 明确规定）。
+// 而正文的 quoted-printable 里 "_" 就是下划线本身 —— 两者不能混用。
+// 旧实现把编码词直接丢给 QP 解码器，于是：
+//     =?UTF-8?Q?Hello_World?=      →  "Hello_World"（下划线没还原成空格）
+//     =?GB2312?Q?=D6=D0_=CE=C4?=   →  "中_文"
+//     =?UTF-8?Q?=E4=BD=A0_=E5=A5=BD?=  →  "你_好"
+// 这是「主题乱编」里最常见的一类（用 Q 编码 + 下划线当空格的中文邮件特别多）。
+// 所以只在「编码词」这一层把字面 "_" 先换成 =20 再解码；=5F 这种转义不受影响。
+function decodeEncodedWord(content, type, charset) {
+    if (String(type).toUpperCase() === 'B') return decodeContent(content, 'base64', charset);
+    return decodeContent(String(content).replace(/_/g, '=20'), 'quoted-printable', charset);
+}
+
+// 【核心修复 · 主题乱编 2/4】RFC 2231 / RFC 5987 参数值的形状是：
+//     charset'language'percent-encoded
+// 只有「合法字符集名 + 两个单引号 + 含 %XX 的载荷」这种**严格形状**才允许做 URI 解码。
+// 旧实现只要字符串里出现 "''" 就 split 后 decodeURIComponent(parts[1])，后果是：
+//     "Re: it''s fine"  →  "s fine"      （主题前半段被整个吃掉）
+// 把「参数值规则」套到普通主题/发件人上，就是「主题乱编」的第二大类根因。
+const RFC2231_CHARSET_RE = /^(utf-?8|us-?ascii|ascii|iso-?8859-?[\d-]*|windows-?\d+|cp\d+|gbk|gb2312|gb18030|big5|shift[_-]?jis|euc-?(jp|kr)|koi8-r|latin\d*|unicode)$/i;
+
+// 整个字符串都是百分号编码：不含空白，且每个 "%" 后面都紧跟两位十六进制。
+const FULLY_PERCENT_ENCODED_RE = /^(?:[^%\s]|%[0-9A-Fa-f]{2})+$/;
+
+function decodeRfc2231Value(text) {
+    const m = /^([A-Za-z0-9._-]{2,20})'([A-Za-z0-9-]{0,10})'(.*)$/.exec(text);
+    if (!m || !RFC2231_CHARSET_RE.test(m[1]) || !/%[0-9A-Fa-f]{2}/.test(m[3])) return null;
+    try { return decodeURIComponent(m[3]); } catch (e) { return null; }
 }
 
 function decodeHeaderValue(text) {
     if (!text) return '';
-    if (text.includes("''")) {
-        const parts = text.split("''");
-        if (parts.length === 2) { try { return decodeURIComponent(parts[1]); } catch (e) {} }
+    const raw = String(text);
+
+    // 1) RFC 2231 参数值（filename* 之类）。严格匹配形状，普通主题绝不会命中。
+    const rfc2231 = decodeRfc2231Value(raw);
+    if (rfc2231 !== null) return rfc2231;
+
+    // 2) RFC 2047 编码词（可跨空白拼接成多个词）。
+    if (raw.includes('=?')) {
+        const rfc2047Regex = /=\?([^?]+)\?([BQbq])\?([^?]+)\?=/g;
+        const cleanText = raw.replace(/\?=\s+=\?/g, '?==?');
+        const decoded = cleanText.replace(rfc2047Regex, (_, charset, type, content) =>
+            decodeEncodedWord(content, type, charset)
+        );
+        if (decoded !== cleanText) return decoded;
     }
-    const rfc2047Regex = /=\?([^?]+)\?([BQbq])\?([^?]+)\?=/g;
-    if (text.includes('=?')) {
-        const cleanText = text.replace(/\?=\s+=\?/g, '?==?');
-        text = cleanText.replace(rfc2047Regex, (_, charset, type, content) => {
-            const encoding = type.toUpperCase() === 'B' ? 'base64' : 'quoted-printable';
-            return decodeContent(content, encoding, charset);
-        });
-        return text;
+
+    // 3) 整串 URL 编码。同样必须严格 —— 旧实现无条件 decodeURIComponent，
+    //    于是 "50%20off today" 变成 "50 off today"、"100%25 done" 变成 "100% done"。
+    //    现在要求：全串无空白、每个 % 后跟两位十六进制、且至少 2 个转义。
+    if (raw.includes('%') && FULLY_PERCENT_ENCODED_RE.test(raw)) {
+        const escapes = (raw.match(/%[0-9A-Fa-f]{2}/g) || []).length;
+        if (escapes >= 2) { try { return decodeURIComponent(raw); } catch (e) {} }
     }
-    if (text.includes('%')) { try { return decodeURIComponent(text); } catch (e) {} }
-    return text.replace(/^["']|["']$/g, '');
+
+    // 4) 只剥掉**成对**的首尾引号。旧实现用 /^["']|["']$/ 单边剥离，
+    //    会把 '重要通知' 的引号剥掉、也会把 `"Bob" <b@x.com>` 剥成半拉。
+    const first = raw.charAt(0);
+    if (raw.length >= 2 && (first === '"' || first === "'") && raw.charAt(raw.length - 1) === first) {
+        return raw.slice(1, -1);
+    }
+    return raw;
 }
 
 // 【核心修复】缝合算法：完美识别邮件头部折叠 (Header Folding)
@@ -556,9 +659,13 @@ function parseKeyMeta(displayKey) {
     if (m) {
         const fromLen = parseInt(m[2], 10);
         const body = displayKey.slice(m[0].length);
-        if (fromLen >= 0 && fromLen <= body.length) {
+        const from = body.slice(0, fromLen);
+        // 【核心修复】老键名（v1）里若发件人以「数字_」开头，会被上面的正则误当成 v2 的长度前缀。
+        // 例：v1 键 `1699999999_2_x@y.com_Subject.eml` 会被解成 from="x@"、subject="y.com_Subject"。
+        // 长度前缀截出来的发件人不可能以 "@" 或 "." 结尾（那一定是被拦腰截断的地址），据此排除。
+        if (fromLen > 0 && fromLen <= body.length && !/[@.]$/.test(from)) {
             return {
-                from: body.slice(0, fromLen),
+                from: from,
                 subject: body.slice(fromLen).replace(/\.eml$/i, '')
             };
         }
@@ -568,7 +675,14 @@ function parseKeyMeta(displayKey) {
     rest = salvageBrokenRfc2047(rest);
     const split = splitV1Key(rest);
     let subjectRaw = split.subject;
-    try { subjectRaw = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch (e) {}
+    // 老清洗把 ? " < > 换成了 "_"，这里近似还原成空格。
+    // ⚠️ 但绝不能对**编码词**做这一步：salvageBrokenRfc2047 刚把 "=_UTF-8_Q_xxx_="
+    //    拼回 "=?UTF-8?Q?xxx?="，此时词内的 "_" 正是「空格」语义，交给 decodeHeaderValue
+    //    才会被正确还原；若在这里先全局换成空格，编码词会被打散成 "=?UTF-8?Q?xxx ?="。
+    //    （实测主题会显示成 "=E4=BD=A0 =E5=A5=BD World" 这种半截乱码。）
+    if (subjectRaw.indexOf('=?') === -1) {
+        try { subjectRaw = decodeURIComponent(subjectRaw).replace(/_/g, ' '); } catch (e) {}
+    }
     return { from: decodeHeaderValue(split.from), subject: decodeHeaderValue(subjectRaw) };
 }
 
@@ -587,8 +701,15 @@ function splitV1Key(rest) {
         while (s > 0 && /[A-Za-z0-9._%+-]/.test(rest[s - 1])) s--;
         let e = at + 1;
         while (e < rest.length && /[A-Za-z0-9.-]/.test(rest[e])) e++;
+        // 【核心修复 · 主题乱编 4/4】老清洗把 "<" ">" 也换成了 "_"，
+        // 于是 `张三 <a@b.com>` 落盘成 `张三 _a@b.com`。
+        // 上面的回溯扫描允许 "_"，会把地址前那个 "_" 一起吞进地址里，
+        // 得到 addr="_a@b.com"、name="" —— 列表页显示成 "<_a@b.com>"，
+        // 而 `>` 残留还会跑进主题（实测主题变成 ">你好"）。
+        // 这里把地址前多余的 "_" 还给显示名，地址从真正的地址字符开始。
+        while (s < e && rest[s] === '_') s++;
         const addr = rest.slice(s, e);
-        const name = rest.slice(0, s).replace(/_+$/, '').trim();
+        const name = rest.slice(0, s).replace(/[_<>]+$/, '').trim();
         let j = e;
         while (j < rest.length && rest[j] === '_') j++;
         return {
@@ -712,6 +833,192 @@ function pickTranslatedText(result) {
         if (typeof result[k] === 'string' && result[k].trim()) return result[k];
     }
     return '';
+}
+
+// ---------- 「就地翻译」：只换文字，不动版式 ----------
+//
+// 旧做法：把正文压成纯文本 → 整段翻译 → 铺进一个 <div>。
+// 结果是译文和原文版式毫无关系：段落、表格、按钮、图片位置全变，用户一按「翻译」就找不到原来看的地方。
+//
+// 新做法（按 token 就地替换）：
+//   1) 把正文切成「标签」与「文本」两类 token，标签原样保留、一个都不动；
+//   2) 只把可翻译的文本节点送去翻译；
+//   3) 译文按**原位置**填回对应的文本节点。
+// 因为标签结构、行内样式、表格布局完全没变，译文渲染出来的版式和原文一致 ——
+// 也就是「尽量不改变原始显示位置」。
+
+// 这些标签里的内容不显示或属于代码，一律不翻译（且已在上游被剥离）。
+const NON_TEXT_TAGS = { script: 1, style: 1, head: 1, title: 1, noscript: 1, textarea: 1, option: 1 };
+
+// 把 HTML 切成 token 流。标签/注释走 raw，普通文本走 text（只有在可翻译区域里才标记 text）。
+function tokenizeHtml(html) {
+    const out = [];
+    const re = /<!--[\s\S]*?-->|<[^>]*>|[^<]+/g;
+    const open = [];
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        const tok = m[0];
+        if (tok.slice(0, 4) === '<!--') { out.push({ raw: tok }); continue; }
+        if (tok.charCodeAt(0) === 60) { // '<'
+            const closeMatch = /^<\s*\/\s*([a-zA-Z][a-zA-Z0-9]*)/.exec(tok);
+            const openMatch = /^<\s*([a-zA-Z][a-zA-Z0-9]*)/.exec(tok);
+            if (closeMatch) {
+                const idx = open.lastIndexOf(closeMatch[1].toLowerCase());
+                if (idx !== -1) open.length = idx;
+            } else if (openMatch && NON_TEXT_TAGS[openMatch[1].toLowerCase()] && !/\/\s*>$/.test(tok)) {
+                open.push(openMatch[1].toLowerCase());
+            }
+            out.push({ raw: tok });
+            continue;
+        }
+        // 文本 token：只有不在 script/style 等内部时才可翻译
+        out.push(open.length ? { raw: tok } : { raw: tok, text: tok });
+    }
+    return out;
+}
+
+const NAMED_ENTITIES = {
+    nbsp: '\u00a0', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+    copy: '\u00a9', reg: '\u00ae', trade: '\u2122', hellip: '\u2026',
+    mdash: '\u2014', ndash: '\u2013', laquo: '\u00ab', raquo: '\u00bb',
+    lsquo: '\u2018', rsquo: '\u2019', ldquo: '\u201c', rdquo: '\u201d',
+    times: '\u00d7', divide: '\u00f7', middot: '\u00b7', bull: '\u2022',
+    deg: '\u00b0', euro: '\u20ac', pound: '\u00a3', yen: '\u00a5', cent: '\u00a2',
+    sect: '\u00a7', para: '\u00b6', prime: '\u2032', permil: '\u2030', shy: '\u00ad'
+};
+
+// 翻译前把实体还原成字符（否则模型会把 "&amp;" 当成单词翻掉），翻译后再统一转义回去。
+function decodeEntities(text) {
+    return String(text).replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (whole, body) => {
+        if (body.charAt(0) === '#') {
+            const hex = body.charAt(1) === 'x' || body.charAt(1) === 'X';
+            const code = parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
+            if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return whole;
+            try { return String.fromCodePoint(code); } catch (e) { return whole; }
+        }
+        const named = NAMED_ENTITIES[body.toLowerCase()];
+        return named === undefined ? whole : named;
+    });
+}
+
+// 是否值得翻译：至少含一个字母（含中日韩等非拉丁文字），且长度 ≥ 2。
+// 纯数字、纯符号、空白片段一律跳过 —— 它们通常是 "|" "·" "1" 这类排版装饰，翻了反而添乱。
+function isTranslatableText(core) {
+    if (core.length < 2) return false;
+    return /[A-Za-z\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u0900-\u097f\u0e00-\u0e7f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(core);
+}
+
+// 翻译一个「纯文本片段」，保留其首尾空白（空白往往承担着 HTML 里的分词作用）。
+async function translateCoreText(env, core, source) {
+    const split = splitForTranslation(core, TRANSLATE_CHUNK_SIZE, TRANSLATE_MAX_CHUNKS);
+    if (split.chunks.length === 0) return '';
+    const parts = await Promise.all(split.chunks.map(chunk =>
+        env.AI.run(TRANSLATE_MODEL, { text: chunk, source_lang: source, target_lang: TRANSLATE_TARGET })
+    ));
+    return parts.map(pickTranslatedText).join('\n\n').trim();
+}
+
+// 翻一批片段：用换行拼成一段文本一次翻完，再按行拆回。
+// ⚠️ 行数对不上就**整批放弃**（返回 null，片段保持原文）。
+//    宁可少翻几个片段，也绝不能把译文错位到别的元素上 —— 错位比重译难查得多。
+async function translateBatchLines(env, batch, source) {
+    if (batch.length === 1) {
+        const only = await translateCoreText(env, batch[0].core, source);
+        return only ? [only] : null;
+    }
+    const res = await env.AI.run(TRANSLATE_MODEL, {
+        text: batch.map(t => t.core).join('\n'),
+        source_lang: source,
+        target_lang: TRANSLATE_TARGET
+    });
+    const text = pickTranslatedText(res);
+    if (!text) return null;
+    const lines = text.split('\n').map(l => l.trim());
+    if (lines.length !== batch.length) return null;
+    return lines;
+}
+
+// 主流程：tokenize → 挑出可翻片段 → 分批并行翻译 → 按原位置拼回。
+// 返回 { html, segments, skipped, truncated }。全部片段都翻失败时抛错，由上层报「翻译失败」。
+async function translateHtmlPreservingLayout(env, html, source) {
+    const tokens = tokenizeHtml(String(html || ''));
+
+    const targets = [];
+    for (const t of tokens) {
+        if (!t.text) continue;
+        const plain = decodeEntities(t.text);
+        const core = plain.trim();
+        if (!isTranslatableText(core)) continue;
+        const at = plain.indexOf(core);
+        t.lead = plain.slice(0, at);
+        t.trail = plain.slice(at + core.length);
+        t.core = core;
+        targets.push(t);
+    }
+
+    if (targets.length === 0) {
+        return { html: tokens.map(t => t.raw).join(''), segments: 0, skipped: 0, truncated: false };
+    }
+
+    // 按字符数切批；批次数受 TRANSLATE_MAX_BATCHES 约束，避免超出子请求上限。
+    const batches = [];
+    let cur = [], curLen = 0;
+    for (const t of targets) {
+        if (batches.length >= TRANSLATE_MAX_BATCHES) break;
+        if (cur.length && curLen + t.core.length > TRANSLATE_BATCH_CHARS) { batches.push(cur); cur = []; curLen = 0; }
+        cur.push(t); curLen += t.core.length + 1;
+    }
+    if (cur.length && batches.length < TRANSLATE_MAX_BATCHES) batches.push(cur);
+
+    // 并行跑批次（固定并发，避免一次性打出几十个请求）。
+    let cursor = 0;
+    const lanes = Math.min(TRANSLATE_BATCH_CONCURRENCY, batches.length);
+    const runners = [];
+    for (let i = 0; i < lanes; i++) {
+        runners.push((async () => {
+            for (;;) {
+                const idx = cursor++;
+                if (idx >= batches.length) return;
+                const batch = batches[idx];
+                try {
+                    const lines = await translateBatchLines(env, batch, source);
+                    if (!lines) continue;
+                    for (let k = 0; k < batch.length; k++) {
+                        if (lines[k]) batch[k].translated = lines[k];
+                    }
+                } catch (e) {
+                    console.error('Translate batch failed:', e && e.stack ? e.stack : e);
+                }
+            }
+        })());
+    }
+    await Promise.all(runners);
+
+    const done = targets.filter(t => typeof t.translated === 'string').length;
+    if (done === 0) throw new Error('translation produced no output');
+
+    let out = '';
+    for (const t of tokens) {
+        out += typeof t.translated === 'string'
+            ? escapeHtml(t.lead + t.translated + t.trail)
+            : t.raw;
+    }
+    return {
+        html: out,
+        segments: done,
+        skipped: targets.length - done,
+        truncated: targets.length - done > 0
+    };
+}
+
+// 译文缓存的键：对邮件键名取哈希，避免超长键名；去掉 trash/ 前缀让收件箱与回收站共用一份译文。
+async function translationCacheKey(mailKey) {
+    const base = String(mailKey).replace(TRASH_PREFIX, '');
+    return TRANSLATION_CACHE_PREFIX + (await sha256Hex(base)).slice(0, 40) + '.html';
+}
+
+async function dropTranslationCache(env, mailKey) {
+    try { await env.MAIL_BUCKET.delete(await translationCacheKey(mailKey)); } catch (e) {}
 }
 
 // 把值安全地内联进 <script>：转义 "<" 等字符，
@@ -1332,15 +1639,16 @@ const FRAME_HEIGHT_SCRIPT = '(function(){'
     + 'if(window.ResizeObserver){try{new ResizeObserver(s).observe(root)}catch(e){}}'
     + 'setTimeout(s,300);setTimeout(s,1500)})();';
 
-function buildFrameDocument(email) {
-    let inner;
-    if (email.html) {
-        inner = stripActiveContent(email.html).html;
-    } else if (email.text && email.text.trim()) {
-        inner = '<pre class="plain">' + escapeHtml(email.text) + '</pre>';
-    } else {
-        inner = '<p style="color:#6b7280">（无正文内容，请查看附件）</p>';
-    }
+// 正文的「内容部分」。原文与译文都从这里出发，保证两边外壳、字体、行高完全一致。
+function frameInnerHtml(email) {
+    if (email.html) return stripActiveContent(email.html).html;
+    if (email.text && email.text.trim()) return '<pre class="plain">' + escapeHtml(email.text) + '</pre>';
+    return '<p style="color:#6b7280">（无正文内容，请查看附件）</p>';
+}
+
+// 沙箱文档外壳。译文同样走这里 —— 译文是「就地替换文字」后的 HTML，
+// 因此渲染出来的版式与原文一模一样，切回原文时显示位置也不会跳。
+function frameShell(inner) {
     return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
         + '<meta name="viewport" content="width=device-width, initial-scale=1">'
         + '<meta name="referrer" content="no-referrer">'
@@ -1348,6 +1656,42 @@ function buildFrameDocument(email) {
         + '<div id="mail-root">' + inner + '</div>'
         + '<script>' + FRAME_HEIGHT_SCRIPT + '<\/script>'
         + '</body></html>';
+}
+
+function buildFrameDocument(email) {
+    return frameShell(frameInnerHtml(email));
+}
+
+// 正文沙箱文档的统一响应头。原文 / 译文共用，避免两条分支的头不一致。
+function frameResponse(body) {
+    return new Response(body, {
+        headers: Object.assign({}, BASE_HEADERS, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'private, max-age=300',
+            'X-Frame-Options': 'SAMEORIGIN',
+            // 把正文强制关进不透明源沙箱：拿不到本站 Cookie / DOM / localStorage。
+            // img-src 放开是为了让邮件里的外链图片能显示；script-src 只放行我们注入的高度回报脚本。
+            'Content-Security-Policy': "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; img-src * data: cid:; style-src 'unsafe-inline' *; font-src * data:; script-src 'unsafe-inline'"
+        })
+    });
+}
+
+// 正文是否值得翻译（决定要不要给用户提示「本来就是中文」等）。
+function emailSourceText(email) {
+    const text = String(email.text || '').trim();
+    if (text) return text;
+    return email.html ? htmlToText(email.html) : '';
+}
+
+// 把一封邮件的正文翻成「保留版式的译文 HTML 文档」。
+async function buildTranslatedFrame(env, email, source) {
+    const result = await translateHtmlPreservingLayout(env, frameInnerHtml(email), source);
+    return {
+        html: frameShell(result.html),
+        segments: result.segments,
+        skipped: result.skipped,
+        truncated: result.truncated
+    };
 }
 
 // ---------- 邮件详情渲染 ----------
@@ -1392,9 +1736,9 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
         </div>`;
     }
 
-    // 翻译按钮。译文由服务端调 Workers AI 生成，原文已是中文 / 语种不受支持时会在状态条上明确说明。
+    // 翻译按钮。译文由服务端按原文版式「就地替换文字」生成，原文已是中文 / 语种不受支持时会在状态条上明确说明。
     const translateBtn = `
-            <button id="translate-btn" onclick="translateMail()" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="把正文翻译成中文">${Icons.translate} <span class="ml-1">翻译</span></button>`;
+            <button id="translate-btn" onclick="translateMail()" class="flex items-center px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-sm font-medium transition whitespace-nowrap active:scale-[0.98]" title="按原文版式就地翻译成中文">${Icons.translate} <span class="ml-1">翻译</span></button>`;
 
     // 下载原始邮件。归档备份、喂给别的客户端、排障看真实头部都用得上。
     const rawBtn = `
@@ -1438,13 +1782,9 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 </div>
                 ${attachmentsHtml}
                 <div id="translate-status" class="hidden"></div>
-                <div id="mail-original">
-                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy"></iframe>
+                <div id="mail-body">
+                    <iframe id="mail-frame" src="/frame/${encodedKey}" title="邮件正文" class="w-full border-0 bg-white block rounded-lg" style="height:320px" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
                     ${strippedNotice}
-                </div>
-                <div id="mail-translated" class="hidden">
-                    <div id="translate-body" class="text-[15px] leading-relaxed text-gray-800 whitespace-pre-wrap break-words select-text bg-indigo-50/40 border border-indigo-100 rounded-xl p-4 sm:p-5"></div>
-                    <p class="mt-3 text-xs text-gray-400">译文由 Workers AI 生成，仅供快速浏览；排版、链接与图片请以原文为准。</p>
                 </div>
             </div>
         </div>
@@ -1452,8 +1792,10 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
     <script>
     (function () {
         var KEY = ${jsonForScript(key)};
-        var translated = null;
-        var view = 'original';
+        var ORIGINAL_SRC = '/frame/' + encodeURIComponent(KEY);
+        var TRANSLATED_SRC = ORIGINAL_SRC + '?t=1';
+        var translated = false;
+        var busy = false;
         function el(id) { return document.getElementById(id); }
 
         function setStatus(text, kind) {
@@ -1466,34 +1808,34 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
             box.textContent = text;
         }
 
-        function setView(next) {
-            var original = el('mail-original');
-            var panel = el('mail-translated');
-            var btn = el('translate-btn');
-            if (!original || !panel) return;
-            view = next;
+        function setLabel(btn, text) {
             var label = btn ? btn.querySelector('span') : null;
-            if (next === 'translated' && translated) {
-                original.classList.add('hidden');
-                panel.classList.remove('hidden');
-                if (label) label.textContent = '显示原文';
-            } else {
-                panel.classList.add('hidden');
-                original.classList.remove('hidden');
-                if (label) label.textContent = translated ? '显示译文' : '翻译';
-            }
+            if (label) label.textContent = text;
         }
 
+        // ⚠️ 原文与译文共用**同一个 iframe 元素**，切换时只改 src，不隐藏、不替换节点。
+        //    这样元素的位置、宽度、父容器结构都不会变 —— 也就是「不改变原始显示位置」。
+        //    服务端在 /frame/<key>?t=1 上做的是「按 token 就地替换文字」，
+        //    标签结构原样保留，所以译文渲染出来的版式和原文一致，切回原文也不会跳。
         window.translateMail = function () {
             var btn = el('translate-btn');
-            if (translated) { setView(view === 'translated' ? 'original' : 'translated'); return; }
+            var frame = el('mail-frame');
+            if (busy) return;
+
+            if (translated) {
+                translated = false;
+                if (frame) frame.src = ORIGINAL_SRC;
+                setLabel(btn, '翻译');
+                setStatus('', 'info');
+                return;
+            }
             if (!btn || btn.disabled) return;
 
-            var label = btn.querySelector('span');
             btn.disabled = true;
+            busy = true;
             btn.classList.add('opacity-60', 'cursor-not-allowed');
-            if (label) label.textContent = '翻译中…';
-            setStatus('正在翻译，长邮件可能需要十几秒…', 'info');
+            setLabel(btn, '翻译中…');
+            setStatus('正在按原文版式就地翻译，长邮件可能需要十几秒…', 'info');
 
             fetch('/api/translate', {
                 method: 'POST',
@@ -1507,21 +1849,21 @@ function renderEmailDetail(email, key, isTrash, uploaded) {
                 var data = r.data || {};
                 if (!data.ok) {
                     setStatus(data.error || ('翻译失败（HTTP ' + r.status + '），请稍后重试'), 'error');
-                    if (label) label.textContent = '翻译';
+                    setLabel(btn, '翻译');
                     return;
                 }
-                translated = data.translated;
-                var body = el('translate-body');
-                if (body) body.textContent = translated;
-                var note = '源语言：' + data.sourceLang;
-                if (data.truncated) note += '　·　邮件较长，仅翻译了前 ' + data.chunks + ' 段';
+                translated = true;
+                if (frame) frame.src = TRANSLATED_SRC;
+                var note = '已按原文版式就地翻译　·　源语言：' + data.sourceLang;
+                if (data.truncated) note += '　·　另有 ' + data.skipped + ' 个片段超出上限，保留原文';
                 setStatus(note, 'info');
-                setView('translated');
+                setLabel(btn, '显示原文');
             }).catch(function () {
                 setStatus('网络错误，请稍后重试', 'error');
-                if (label) label.textContent = '翻译';
+                setLabel(btn, '翻译');
             }).then(function () {
                 btn.disabled = false;
+                busy = false;
                 btn.classList.remove('opacity-60', 'cursor-not-allowed');
             });
         };
@@ -1654,6 +1996,9 @@ async function handleRequest(request, env, ctx) {
     // ---------- 正文翻译 ----------
     // 走 Workers AI（m2m100）。注意：邮件正文会被送进模型推理，
     // 但对个人自建的邮箱来说，推理跑在同一个 Cloudflare 账号的基础设施内。
+    //
+    // 这里只负责「翻 + 缓存 + 回报状态」；真正的译文 HTML 由 /frame/<key>?t=1 提供，
+    // 前端拿到 ok 之后把 iframe 的 src 换成 ?t=1 即可 —— 元素位置不变，只换内容。
     if (url.pathname === '/api/translate' && method === 'POST') {
         if (!env.AI) {
             return jsonResponse({
@@ -1675,10 +2020,7 @@ async function handleRequest(request, env, ctx) {
         if (!target) return jsonResponse({ ok: false, error: '邮件不存在或已被删除' }, 404);
 
         const email = processEmail(bufferToBinaryString(await target.obj.arrayBuffer()));
-
-        // 优先用 text/plain 部分；只有 HTML 的邮件再退回「HTML 转纯文本」
-        let text = String(email.text || '').trim();
-        if (!text && email.html) text = htmlToText(email.html);
+        const text = emailSourceText(email);
         if (!text) return jsonResponse({ ok: false, error: '这封邮件没有可翻译的正文' }, 422);
 
         const source = detectSourceLang(text);
@@ -1689,26 +2031,22 @@ async function handleRequest(request, env, ctx) {
             return jsonResponse({ ok: false, error: '这封邮件本来就是中文，无需翻译' }, 422);
         }
 
-        const split = splitForTranslation(text, TRANSLATE_CHUNK_SIZE, TRANSLATE_MAX_CHUNKS);
-        if (split.chunks.length === 0) {
-            return jsonResponse({ ok: false, error: '这封邮件没有可翻译的正文' }, 422);
-        }
-
         try {
-            // 分段并行翻译：串行翻长邮件会让浏览器等到超时
-            const parts = await Promise.all(split.chunks.map(chunk =>
-                env.AI.run(TRANSLATE_MODEL, { text: chunk, source_lang: source, target_lang: TRANSLATE_TARGET })
-            ));
-            const translated = parts.map(pickTranslatedText).join('\n\n').trim();
-            if (!translated) {
-                return jsonResponse({ ok: false, error: '翻译服务没有返回内容，请稍后重试' }, 502);
+            const result = await buildTranslatedFrame(env, email, source);
+            // 缓存整篇译文：来回切换原文/译文时直接命中，不再重复计费。
+            try {
+                await env.MAIL_BUCKET.put(await translationCacheKey(target.key), result.html, {
+                    httpMetadata: { contentType: 'text/html; charset=utf-8' }
+                });
+            } catch (e) {
+                console.error('Cache translated html failed:', e && e.stack ? e.stack : e);
             }
             return jsonResponse({
                 ok: true,
-                translated: translated,
                 sourceLang: source,
-                chunks: split.chunks.length,
-                truncated: split.truncated
+                segments: result.segments,
+                skipped: result.skipped,
+                truncated: result.truncated
             });
         } catch (e) {
             console.error('Translate failed:', e && e.stack ? e.stack : e);
@@ -1822,7 +2160,11 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === '/purge' && method === 'POST') {
         const fd = await request.formData();
         const key = fd.get('key');
-        if (key && key.startsWith(TRASH_PREFIX)) await env.MAIL_BUCKET.delete(key);
+        if (key && key.startsWith(TRASH_PREFIX)) {
+            await env.MAIL_BUCKET.delete(key);
+            // 顺手清掉这封邮件缓存的译文，免得留下永远读不到的孤儿对象。
+            await dropTranslationCache(env, key);
+        }
         return Response.redirect(url.origin + '/trash', 302);
     }
     if (url.pathname === '/restore' && method === 'POST') {
@@ -1847,7 +2189,10 @@ async function handleRequest(request, env, ctx) {
                     if (obj) { await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body); await env.MAIL_BUCKET.delete(key); }
                 }
             } else if (action === 'purge') {
-                if (key.startsWith(TRASH_PREFIX)) await env.MAIL_BUCKET.delete(key);
+                if (key.startsWith(TRASH_PREFIX)) {
+                    await env.MAIL_BUCKET.delete(key);
+                    await dropTranslationCache(env, key);
+                }
             } else if (action === 'restore') {
                 if (key.startsWith(TRASH_PREFIX)) {
                     const obj = await env.MAIL_BUCKET.get(key);
@@ -1881,17 +2226,39 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname.startsWith('/frame/')) {
         const resolved = await resolveEmailKey(env, safeDecode(url.pathname.slice('/frame/'.length)));
         if (!resolved) return textResponse('Not Found', 404);
+
+        // ?t=1 → 保留版式的译文文档。和原文走同一个 iframe、同一套外壳，
+        // 所以切换原文/译文时元素位置不动，只是里面的文字换了语言。
+        if (url.searchParams.get('t') === '1') {
+            const cacheKey = await translationCacheKey(resolved.key);
+            try {
+                const cached = await env.MAIL_BUCKET.get(cacheKey);
+                if (cached) return frameResponse(await cached.text());
+            } catch (e) {}
+
+            if (env.AI) {
+                try {
+                    const email = processEmail(bufferToBinaryString(await resolved.obj.arrayBuffer()));
+                    const text = emailSourceText(email);
+                    const source = detectSourceLang(text);
+                    if (text && TRANSLATE_LANGS.indexOf(source) !== -1 && source !== TRANSLATE_TARGET) {
+                        const result = await buildTranslatedFrame(env, email, source);
+                        try {
+                            await env.MAIL_BUCKET.put(cacheKey, result.html, {
+                                httpMetadata: { contentType: 'text/html; charset=utf-8' }
+                            });
+                        } catch (e) {}
+                        return frameResponse(result.html);
+                    }
+                } catch (e) {
+                    console.error('Translated frame failed:', e && e.stack ? e.stack : e);
+                }
+            }
+            // 翻不了（未绑定 AI / 语种不支持 / 模型报错）就静默退回原文，绝不让 iframe 空着。
+        }
+
         const email = processEmail(bufferToBinaryString(await resolved.obj.arrayBuffer()));
-        return new Response(buildFrameDocument(email), {
-            headers: Object.assign({}, BASE_HEADERS, {
-                'Content-Type': 'text/html; charset=utf-8',
-                'Cache-Control': 'private, max-age=300',
-                'X-Frame-Options': 'SAMEORIGIN',
-                // 把正文强制关进不透明源沙箱：拿不到本站 Cookie / DOM / localStorage。
-                // img-src 放开是为了让邮件里的外链图片能显示；script-src 只放行我们注入的高度回报脚本。
-                'Content-Security-Policy': "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; img-src * data: cid:; style-src 'unsafe-inline' *; font-src * data:; script-src 'unsafe-inline'"
-            })
-        });
+        return frameResponse(buildFrameDocument(email));
     }
 
     if (url.pathname.startsWith('/attachment/')) {
