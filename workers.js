@@ -1140,7 +1140,9 @@ const Icons = {
     info: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" /></svg>`,
     chart: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /></svg>`,
     send: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>`,
-    shield: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" /></svg>`
+    shield: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" /></svg>`,
+    eye: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>`,
+    eyeSlash: `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>`
 };
 
 
@@ -1217,6 +1219,7 @@ body{font-family:'Inter',system-ui,-apple-system,'PingFang SC','Hiragino Sans GB
 .icon-btn:active{transform:scale(.94)}
 .icon-btn.danger:hover{background:var(--danger-bg);color:var(--danger)}
 .icon-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.icon-btn.on{background:var(--brand-50);color:var(--brand-700)}
 
 /* ---------- 输入框 ---------- */
 .input{width:100%;background:var(--surface-2);border:1.5px solid var(--border);color:var(--text-1);border-radius:12px;padding:.72rem 1rem;font-size:.9rem;outline:none;transition:border-color .16s,box-shadow .16s,background .16s}
@@ -1271,7 +1274,7 @@ body{font-family:'Inter',system-ui,-apple-system,'PingFang SC','Hiragino Sans GB
 .view-divider{height:1px;background:var(--border);flex-shrink:0}
 
 /* ---------- 邮件行 ---------- */
-.email-row{display:block;background:var(--surface);border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;position:relative;user-select:none}
+.email-row{display:block;background:var(--surface);border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;position:relative;user-select:none;content-visibility:auto;contain-intrinsic-size:auto 78px}
 .email-row:hover{background:var(--surface-2)}
 .email-row.selected{background:var(--brand-50)}
 .email-row.kb-focus{box-shadow:inset 3px 0 0 var(--brand)}
@@ -1546,6 +1549,20 @@ function syncStarBadge(n){
   else b.style.display = 'none';
 }
 
+/* ---------- 密码可见切换 ---------- */
+var ICON_EYE = '${'<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>'}';
+var ICON_EYE_OFF = '${'<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>'}';
+window.togglePw = function(btn){
+  var wrap = btn.closest ? btn.closest('.pw-wrap') : null;
+  var input = wrap ? wrap.querySelector('input') : null;
+  if(!input) return;
+  var show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.innerHTML = show ? ICON_EYE_OFF : ICON_EYE;
+  btn.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
+  btn.style.color = show ? 'var(--brand-700)' : '';
+};
+
 /* ---------- 复制 ---------- */
 window.copyText = function(text, msg){
   function done(){ toast(msg || '已复制到剪贴板', 'success'); }
@@ -1792,6 +1809,16 @@ const authField = (label, icon, inputHtml, hint) => `
 
 const authInputCls = 'input pl-11 py-3';
 
+const authPwField = (label, name, autocomplete, placeholder, extra) => `
+    <div>
+        <label class="field-label">${label}</label>
+        <div class="relative pw-wrap">
+            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none" style="color:var(--text-3)">${Icons.lock}</div>
+            <input type="password" name="${name}" autocomplete="${autocomplete}" class="${authInputCls} !pr-11" placeholder="${placeholder}" required ${extra || ''}>
+            <button type="button" onclick="togglePw(this)" class="absolute inset-y-0 right-0 pr-3.5 flex items-center transition-colors hover:opacity-80" style="color:var(--text-3)" aria-label="显示密码" tabindex="-1">${Icons.eye}</button>
+        </div>
+    </div>`;
+
 const renderLogin = (error = "", siteKey = "") => {
     const alert = error
         ? `<div class="alert alert-error mb-6"><span class="flex-shrink-0 mt-0.5">${Icons.alert}</span><span>${escapeHtml(error)}</span></div>`
@@ -1800,7 +1827,7 @@ const renderLogin = (error = "", siteKey = "") => {
         ${alert}
         <form method="POST" class="space-y-5" onsubmit="return armSubmit(document.getElementById('loginBtn'), '登录中…')">
             ${authField('用户名', Icons.user, `<input type="text" name="username" autocomplete="username" class="${authInputCls}" placeholder="请输入用户名" required autofocus>`)}
-            ${authField('密码', Icons.lock, `<input type="password" name="password" autocomplete="current-password" class="${authInputCls}" placeholder="••••••••" required>`)}
+            ${authPwField('密码', 'password', 'current-password', '••••••••')}
             ${siteKey ? `<div class="flex justify-center pt-1"><div class="cf-turnstile" data-sitekey="${escapeAttr(siteKey)}" data-theme="auto"></div></div>` : ''}
             <button type="submit" id="loginBtn" class="btn btn-primary w-full py-3.5 text-base">登录</button>
         </form>`,
@@ -1815,7 +1842,8 @@ const renderSetup = (error = "") => {
         ${alert}
         <form method="POST" action="/setup" class="space-y-5" onsubmit="return armSubmit(document.getElementById('setupBtn'), '创建中…')">
             ${authField('管理员用户名', Icons.user, `<input type="text" name="username" autocomplete="username" class="${authInputCls}" placeholder="请输入用户名" required autofocus>`)}
-            ${authField('管理员密码', Icons.lock, `<input type="password" name="password" autocomplete="new-password" minlength="8" class="${authInputCls}" placeholder="至少 8 位" required>`, '密码至少 8 位，请妥善保管')}
+            ${authPwField('管理员密码', 'password', 'new-password', '至少 8 位', 'minlength="8"')}
+            <p class="text-xs -mt-3" style="color:var(--text-3)">密码至少 8 位，请妥善保管</p>
             <button type="submit" id="setupBtn" class="btn btn-primary w-full py-3.5 text-base">完成设置并登录</button>
         </form>`,
         { title: '欢迎使用', subtitle: '只需一步，即可启用你的私人邮箱', siteKey: '' });
@@ -1962,6 +1990,11 @@ function renderSettings(settings, turnstile, forward, opts) {
         ? '<span class="chip chip-green">已启用</span><span class="text-xs" style="color:var(--text-2)">登录页会显示人机验证</span>'
         : '<span class="chip chip-gray">未启用</span><span class="text-xs" style="color:var(--text-2)">登录页会跳过人机验证</span>';
 
+    const pwInput = (name, autocomplete, extra) => `
+        <div class="relative pw-wrap">
+            <input type="password" name="${name}" autocomplete="${autocomplete}" required ${extra || ''} class="input !pr-11">
+            <button type="button" onclick="togglePw(this)" class="absolute inset-y-0 right-0 pr-3.5 flex items-center" style="color:var(--text-3)" aria-label="显示密码" tabindex="-1">${Icons.eye}</button>
+        </div>`;
     const statCard = (icon, bg, color, num, label) => `
         <div class="stat">
             <div class="stat-ic" style="background:${bg};color:${color}">${icon}</div>
@@ -2021,9 +2054,9 @@ function renderSettings(settings, turnstile, forward, opts) {
                     <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.key}</span>修改密码</h2>
                     <p class="panel-desc mb-4">更新后<b style="color:var(--text-1)">其它设备上的登录会立即失效</b>，当前设备不受影响，无需重新登录。</p>
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div><label class="field-label">当前密码</label><input type="password" name="current_password" autocomplete="current-password" required class="input"></div>
-                        <div><label class="field-label">新密码</label><input type="password" name="new_password" autocomplete="new-password" minlength="8" required placeholder="至少 8 位" class="input"></div>
-                        <div><label class="field-label">确认新密码</label><input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required class="input"></div>
+                        <div><label class="field-label">当前密码</label>${pwInput('current_password', 'current-password')}</div>
+                        <div><label class="field-label">新密码</label>${pwInput('new_password', 'new-password', 'minlength="8" placeholder="至少 8 位"')}</div>
+                        <div><label class="field-label">确认新密码</label>${pwInput('confirm_password', 'new-password', 'minlength="8"')}</div>
                     </div>
                     <button type="submit" class="btn btn-dark mt-5">更新密码</button>
                 </form>
@@ -2211,21 +2244,7 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
         </div>`;
     }
 
-    // 原始头部查看：只展示有信息量的字段
-    const headerRows = [
-        ['发件人', 'from'], ['收件人', 'to'], ['抄送', 'cc'], ['日期', 'date'],
-        ['主题', 'subject'], ['Message-ID', 'message-id'], ['回复至', 'reply-to'],
-        ['Return-Path', 'return-path'], ['X-Mailer', 'x-mailer']
-    ].filter(([, k]) => email.headers[k])
-     .map(([label, k]) => `<dt>${label}</dt><dd>${escapeHtml(String(email.headers[k]))}</dd>`).join('');
-    const headersHtml = headerRows ? `
-        <details class="panel !p-4 sm:!p-5 mb-6 group">
-            <summary class="flex items-center gap-2 cursor-pointer font-bold text-sm list-none" style="color:var(--text-1)">
-                <span style="color:var(--brand-700)">${Icons.code}</span>查看原始头部
-                <span class="ml-auto text-xs font-medium" style="color:var(--text-3)">点击展开</span>
-            </summary>
-            <dl class="kv mt-4 pt-4" style="border-top:1px solid var(--border)">${headerRows}</dl>
-        </details>` : '';
+    // （已移除「查看原始头部」入口）
 
     const navBtn = (targetKey, icon, label, disabled) => disabled
         ? `<span class="icon-btn" style="opacity:.3;cursor:not-allowed" aria-disabled="true" title="${label}">${icon}</span>`
@@ -2299,7 +2318,6 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
                 </div>
 
                 ${attachmentsHtml}
-                ${headersHtml}
 
                 <div id="translate-status" class="hidden"></div>
                 <div id="mail-body">
@@ -2496,6 +2514,14 @@ function renderMailListPage(p) {
             <button class="icon-btn" title="全部标记为已读">${Icons.checkAll}</button>
         </form>` : '';
 
+    const unreadFilter = (!isTrash) ? `
+        <a href="${p.filterToggleHref}" class="icon-btn${p.unreadOnly ? ' on' : ''}" title="${p.unreadOnly ? '显示全部邮件' : '只看未读邮件'}">${Icons.unread}</a>` : '';
+
+    const emptyTrash = (isTrash && p.showEmptyTrash) ? `
+        <form method="POST" action="/purge-all" onsubmit="return confirmSingle(event, '确定要清空回收站吗？所有邮件将被彻底删除，此操作不可恢复！', true)" class="flex-shrink-0">
+            <button class="icon-btn danger" title="清空回收站">${Icons.trash}</button>
+        </form>` : '';
+
     return `
     <div class="view fade-in">
         <div class="view-head">
@@ -2509,7 +2535,9 @@ function renderMailListPage(p) {
                     <h1 class="view-title truncate">${p.title}</h1>
                 </div>
                 <div class="flex items-center gap-0.5 flex-shrink-0">
+                    ${unreadFilter}
                     ${markAllRead}
+                    ${emptyTrash}
                     <button onclick="window.location.reload()" class="icon-btn" title="刷新">${Icons.refresh}</button>
                     <a href="/settings" class="icon-btn" title="设置">${Icons.gear}</a>
                 </div>
@@ -2521,6 +2549,7 @@ function renderMailListPage(p) {
         </div>
 
         <form method="GET" action="${p.searchAction}" class="flex items-center gap-2 px-3 sm:px-5 py-2.5 flex-shrink-0" style="border-bottom:1px solid var(--border);background:var(--surface)">
+            ${p.unreadOnly ? '<input type="hidden" name="unread" value="1">' : ''}
             <div class="relative flex-1 min-w-0">
                 <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style="color:var(--text-3)">${Icons.search}</span>
                 <input id="list-search" type="search" name="q" value="${p.queryAttr}" autocomplete="off" placeholder="搜索主题或发件人…  ( 按 / 快速聚焦 )"
@@ -2533,6 +2562,8 @@ function renderMailListPage(p) {
         <div class="view-body">
             <form id="batch-form" method="POST" action="/batch-action">
                 <input type="hidden" name="next" value="${p.nextValue}">
+                <input type="hidden" name="q" value="${p.queryAttr}">
+                <input type="hidden" name="limit" value="${p.pageSizeAttr}">
                 <div class="px-4 sm:px-5 py-2 flex items-center justify-between gap-3 flex-shrink-0" style="border-bottom:1px solid var(--border)">
                     <span class="text-xs" style="color:var(--text-3)">${p.countLine}</span>
                     <span class="text-xs hidden lg:flex items-center gap-1.5" style="color:var(--text-3)">
@@ -2548,6 +2579,75 @@ function renderMailListPage(p) {
             </form>
         </div>
     </div>`;
+}
+
+// ---------- 邮箱计数缓存 ----------
+// _sys/counts.json: { total, unread, starred, trash }
+// 目的：侧栏徽标、设置页统计不再每次全量 list() R2（翻到底最多 20 页，很贵），
+// 读一次小 JSON 即可。所有写操作都增量维护；列表页是权威数据源，
+// 每次渲染顺手用真实值校准缓存，兜住一切漂移。
+const COUNTS_FILE = SYS_PREFIX + 'counts.json';
+async function getCounts(env) {
+    try {
+        const obj = await env.MAIL_BUCKET.get(COUNTS_FILE);
+        if (obj) {
+            const c = await obj.json();
+            if (c && typeof c.total === 'number') return c;
+        }
+    } catch (e) {}
+    return null;
+}
+async function putCounts(env, c) {
+    try {
+        await env.MAIL_BUCKET.put(COUNTS_FILE, JSON.stringify(c), {
+            httpMetadata: { contentType: 'application/json' }
+        });
+    } catch (e) {}
+}
+async function refreshCounts(env) {
+    const c = { total: 0, unread: 0, starred: 0, trash: 0 };
+    try {
+        for (const o of await listAllObjects(env)) {
+            if (o.key.startsWith(TRASH_PREFIX)) { c.trash++; continue; }
+            if (!isMailKey(o.key)) continue;
+            c.total++;
+            const md = o.customMetadata || {};
+            if (md.isRead !== 'true') c.unread++;
+            if (md.isStarred === 'true') c.starred++;
+        }
+    } catch (e) {}
+    await putCounts(env, c);
+    return c;
+}
+async function countsOrRefresh(env) {
+    return (await getCounts(env)) || (await refreshCounts(env));
+}
+// 增量更新计数并钳住不小于 0；缓存缺失时先全量重建再增量。
+async function bumpCounts(env, d) {
+    const c = (await getCounts(env)) || (await refreshCounts(env));
+    let touched = false;
+    for (const k of ['total', 'unread', 'starred', 'trash']) {
+        if (d[k]) { c[k] = Math.max(0, c[k] + d[k]); touched = true; }
+    }
+    if (touched) await putCounts(env, c);
+    return c;
+}
+// 限流并发：Workers 单次调用出站连接数有限，R2 批量操作 5 路并行。
+// （顺序 for+await 在批量删 50 封时是 100 次串行 R2 调用，慢一个数量级。）
+async function eachLimit(items, limit, fn) {
+    const ret = new Array(items.length);
+    let i = 0;
+    async function worker() {
+        while (i < items.length) {
+            const idx = i++;
+            ret[idx] = await fn(items[idx], idx);
+        }
+    }
+    const n = Math.min(limit, items.length);
+    const workers = [];
+    for (let w = 0; w < n; w++) workers.push(worker());
+    await Promise.all(workers);
+    return ret;
 }
 
 async function handleRequest(request, env, ctx) {
@@ -2735,23 +2835,8 @@ async function handleRequest(request, env, ctx) {
     }
 
     // ---------- 应用内设置页 ----------
-    // 邮箱统计：设置页卡片 + 各处徽标共用，一次列举算完
-    async function getMailboxStats(env) {
-        const stats = { total: 0, unread: 0, starred: 0, trash: 0 };
-        try {
-            for (const o of await listAllObjects(env)) {
-                if (o.key.startsWith(TRASH_PREFIX)) { stats.trash++; continue; }
-                if (!isMailKey(o.key)) continue;
-                stats.total++;
-                const md = o.customMetadata || {};
-                if (md.isRead !== 'true') stats.unread++;
-                if (md.isStarred === 'true') stats.starred++;
-            }
-        } catch (e) {}
-        return stats;
-    }
-
     // ---------- 星标 / 已读状态（JSON，无刷新切换） ----------
+    // 计数走增量缓存：原来每次点星标都要全量 list() 翻到底，现在只是一次小 JSON 读写。
     if (url.pathname === '/api/flag' && method === 'POST') {
         let body = null;
         try { body = await request.json(); } catch (e) {}
@@ -2759,45 +2844,73 @@ async function handleRequest(request, env, ctx) {
         // resolveEmailKey 会拒绝 CONFIG_FILE 与 _sys/ 内部键，天然防越权
         const resolved = rawKey ? await resolveEmailKey(env, rawKey) : null;
         if (!resolved) return jsonResponse({ ok: false, error: '邮件不存在或已删除' }, 404);
-        const meta = Object.assign({}, resolved.obj.customMetadata);
+        const before = Object.assign({}, resolved.obj.customMetadata);
+        const meta = Object.assign({}, before);
+        const delta = {};
         let changed = false;
-        if (body && typeof body.star === 'boolean') { meta.isStarred = body.star ? 'true' : 'false'; changed = true; }
-        if (body && typeof body.read === 'boolean' && !resolved.isTrash) { meta.isRead = body.read ? 'true' : 'false'; changed = true; }
+        if (body && typeof body.star === 'boolean') {
+            const want = body.star ? 'true' : 'false';
+            if (before.isStarred !== want) {
+                meta.isStarred = want; changed = true;
+                delta.starred = body.star ? 1 : -1;
+            }
+        }
+        if (body && typeof body.read === 'boolean' && !resolved.isTrash) {
+            const want = body.read ? 'true' : 'false';
+            if (before.isRead !== want) {
+                meta.isRead = want; changed = true;
+                delta.unread = body.read ? -1 : 1;
+            }
+        }
         if (changed) {
             const buf = await resolved.obj.arrayBuffer();
             await env.MAIL_BUCKET.put(resolved.key, buf, { customMetadata: meta });
         }
-        let starCount = 0;
-        try {
-            for (const o of await listAllObjects(env)) {
-                if (isMailKey(o.key) && (o.customMetadata || {}).isStarred === 'true') starCount++;
-            }
-        } catch (e) {}
-        return jsonResponse({ ok: true, star: meta.isStarred === 'true', read: meta.isRead !== 'false', starCount: starCount });
+        const counts = await bumpCounts(env, delta);
+        return jsonResponse({ ok: true, star: meta.isStarred === 'true', read: meta.isRead !== 'false', starCount: counts.starred });
     }
 
-    // ---------- 全部标记为已读 ----------
+    // ---------- 全部标记为已读（5 路并发） ----------
     if (url.pathname === '/mark-all-read' && method === 'POST') {
         const fd = await request.formData();
         const back = String(fd.get('next') || '') === '/starred' ? '/starred' : '/';
-        let n = 0;
+        const targets = [];
         for (const o of await listAllObjects(env)) {
             if (!isMailKey(o.key)) continue;
             if ((o.customMetadata || {}).isRead === 'true') continue;
-            const obj = await env.MAIL_BUCKET.get(o.key);
-            if (!obj) continue;
-            await env.MAIL_BUCKET.put(o.key, obj.body, {
+            targets.push(o.key);
+        }
+        await eachLimit(targets, 5, async (key) => {
+            const obj = await env.MAIL_BUCKET.get(key);
+            if (!obj) return;
+            await env.MAIL_BUCKET.put(key, obj.body, {
                 customMetadata: Object.assign({}, obj.customMetadata, { isRead: 'true' })
             });
-            n++;
-        }
-        const msg = n > 0 ? ('已将 ' + n + ' 封邮件标记为已读') : '没有未读邮件';
+        });
+        // 全部已读后未读数直接清零，不用重算
+        const c = (await getCounts(env)) || (await refreshCounts(env));
+        c.unread = 0;
+        await putCounts(env, c);
+        const msg = targets.length > 0 ? ('已将 ' + targets.length + ' 封邮件标记为已读') : '没有未读邮件';
         return Response.redirect(url.origin + back + '?toast=' + encodeURIComponent(msg), 302);
+    }
+
+    // ---------- 清空回收站（5 路并发） ----------
+    if (url.pathname === '/purge-all' && method === 'POST') {
+        const keys = [];
+        for (const o of await listAllObjects(env, { prefix: TRASH_PREFIX })) keys.push(o.key);
+        await eachLimit(keys, 5, async (key) => {
+            await env.MAIL_BUCKET.delete(key);
+            await dropTranslationCache(env, key);
+        });
+        if (keys.length) await bumpCounts(env, { trash: -keys.length });
+        const msg = keys.length > 0 ? ('已清空回收站（' + keys.length + ' 封）') : '回收站已经是空的';
+        return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent(msg), 302);
     }
 
     if (url.pathname === '/settings') {
         const settings = await getSettings(env);
-        const stats = await getMailboxStats(env);
+        const stats = await countsOrRefresh(env);
         const layoutOpts = { unreadCount: stats.unread, starCount: stats.starred };
 
         if (method === 'POST') {
@@ -2861,7 +2974,7 @@ async function handleRequest(request, env, ctx) {
     // 以前想改密码只能删掉 sys_config.json 重新初始化 —— 那会连带清掉全部配置和会话，太糙了。
     if (url.pathname === '/settings/password' && method === 'POST') {
         const settings = await getSettings(env);
-        const stats2 = await getMailboxStats(env);
+        const stats2 = await countsOrRefresh(env);
         const back = (opts, status) => htmlResponse(renderLayout(
             renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env),
                 Object.assign({}, opts, { stats: stats2 })),
@@ -2903,7 +3016,17 @@ async function handleRequest(request, env, ctx) {
         const key = fd.get('key');
         if (key && !key.startsWith(TRASH_PREFIX) && key !== CONFIG_FILE) {
             const obj = await env.MAIL_BUCKET.get(key);
-            if (obj) { await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body); await env.MAIL_BUCKET.delete(key); }
+            if (obj) {
+                const md = obj.customMetadata || {};
+                // 移动时保留已读/星标元数据（原实现会丢）
+                await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body, { customMetadata: Object.assign({}, md) });
+                await env.MAIL_BUCKET.delete(key);
+                await bumpCounts(env, {
+                    total: -1, trash: 1,
+                    unread: md.isRead !== 'true' ? -1 : 0,
+                    starred: md.isStarred === 'true' ? -1 : 0
+                });
+            }
         }
         return Response.redirect(url.origin + '/?toast=' + encodeURIComponent('已移入回收站'), 302);
     }
@@ -2914,6 +3037,7 @@ async function handleRequest(request, env, ctx) {
             await env.MAIL_BUCKET.delete(key);
             // 顺手清掉这封邮件缓存的译文，免得留下永远读不到的孤儿对象。
             await dropTranslationCache(env, key);
+            await bumpCounts(env, { trash: -1 });
         }
         return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent('已彻底删除'), 302);
     }
@@ -2922,78 +3046,111 @@ async function handleRequest(request, env, ctx) {
         const key = fd.get('key');
         if (key && key.startsWith(TRASH_PREFIX)) {
             const obj = await env.MAIL_BUCKET.get(key);
-            if (obj) { await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body); await env.MAIL_BUCKET.delete(key); }
+            if (obj) {
+                const md = obj.customMetadata || {};
+                await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body, { customMetadata: Object.assign({}, md) });
+                await env.MAIL_BUCKET.delete(key);
+                await bumpCounts(env, {
+                    total: 1, trash: -1,
+                    unread: md.isRead !== 'true' ? 1 : 0,
+                    starred: md.isStarred === 'true' ? 1 : 0
+                });
+            }
         }
         return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent('已恢复到收件箱'), 302);
     }
 
     if (url.pathname === '/batch-action' && method === 'POST') {
         const fd = await request.formData();
-        const keys = fd.getAll('keys');
+        const keys = fd.getAll('keys').filter(k => k && k !== CONFIG_FILE);
         const action = fd.get('action');
+        const totals = { total: 0, unread: 0, starred: 0, trash: 0 };
         let done = 0;
-        for (const key of keys) {
-            if (key === CONFIG_FILE) continue;
-            if (action === 'delete') {
-                if (!key.startsWith(TRASH_PREFIX)) {
-                    const obj = await env.MAIL_BUCKET.get(key);
-                    if (obj) { await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body); await env.MAIL_BUCKET.delete(key); done++; }
-                }
-            } else if (action === 'purge') {
-                if (key.startsWith(TRASH_PREFIX)) {
-                    await env.MAIL_BUCKET.delete(key);
-                    await dropTranslationCache(env, key);
-                    done++;
-                }
-            } else if (action === 'restore') {
-                if (key.startsWith(TRASH_PREFIX)) {
-                    const obj = await env.MAIL_BUCKET.get(key);
-                    if (obj) { await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body); await env.MAIL_BUCKET.delete(key); done++; }
-                }
-            } else if (action === 'mark_read' || action === 'mark_unread') {
-                if (!key.startsWith(TRASH_PREFIX)) {
-                    const obj = await env.MAIL_BUCKET.get(key);
-                    if (obj) {
-                        // ⚠️ 保留 isStarred 等已有元数据，不能只写 isRead
-                        await env.MAIL_BUCKET.put(key, obj.body, {
-                            customMetadata: Object.assign({}, obj.customMetadata, {
-                                isRead: action === 'mark_read' ? 'true' : 'false'
-                            })
-                        });
-                        done++;
-                    }
-                }
-            } else if (action === 'star' || action === 'unstar') {
-                if (!key.startsWith(TRASH_PREFIX)) {
-                    const obj = await env.MAIL_BUCKET.get(key);
-                    if (obj) {
-                        await env.MAIL_BUCKET.put(key, obj.body, {
-                            customMetadata: Object.assign({}, obj.customMetadata, {
-                                isStarred: action === 'star' ? 'true' : 'false'
-                            })
-                        });
-                        done++;
-                    }
-                }
-            }
-        }
 
-        // 批量操作完成后回到用户刚才所在的页面（收件箱 / 已加星标 / 回收站）。
-        //
-        // 这里不能用 Referer：
-        //   1) 本站所有响应都带 Referrer-Policy: no-referrer，浏览器压根不会发 Referer；
-        //   2) Response.redirect() 只接受**绝对 URL**，传相对路径会直接抛
-        //      TypeError: Failed to parse URL from / —— 那就是「服务暂时不可用」的根因。
-        // 改为由表单自带 next 字段，并做白名单校验，顺带杜绝开放重定向。
+        // 单封处理函数：返回 { ok, d }，d 为该封邮件带来的计数变化。
+        // 移动（删除/恢复）时保留 customMetadata，原实现会丢已读/星标状态。
+        const applyOne = async (key) => {
+            const d = { total: 0, unread: 0, starred: 0, trash: 0 };
+            const wasUnread = md => (md.isRead !== 'true' ? 1 : 0);
+            const wasStarred = md => (md.isStarred === 'true' ? 1 : 0);
+            if (action === 'delete') {
+                if (key.startsWith(TRASH_PREFIX)) return { ok: false, d };
+                const obj = await env.MAIL_BUCKET.get(key);
+                if (!obj) return { ok: false, d };
+                const md = obj.customMetadata || {};
+                await env.MAIL_BUCKET.put(TRASH_PREFIX + key, obj.body, { customMetadata: Object.assign({}, md) });
+                await env.MAIL_BUCKET.delete(key);
+                d.total = -1; d.trash = 1; d.unread = -wasUnread(md); d.starred = -wasStarred(md);
+                return { ok: true, d };
+            }
+            if (action === 'purge') {
+                if (!key.startsWith(TRASH_PREFIX)) return { ok: false, d };
+                await env.MAIL_BUCKET.delete(key);
+                await dropTranslationCache(env, key);
+                d.trash = -1;
+                return { ok: true, d };
+            }
+            if (action === 'restore') {
+                if (!key.startsWith(TRASH_PREFIX)) return { ok: false, d };
+                const obj = await env.MAIL_BUCKET.get(key);
+                if (!obj) return { ok: false, d };
+                const md = obj.customMetadata || {};
+                await env.MAIL_BUCKET.put(key.replace(TRASH_PREFIX, ''), obj.body, { customMetadata: Object.assign({}, md) });
+                await env.MAIL_BUCKET.delete(key);
+                d.total = 1; d.trash = -1; d.unread = wasUnread(md); d.starred = wasStarred(md);
+                return { ok: true, d };
+            }
+            if (action === 'mark_read' || action === 'mark_unread') {
+                if (key.startsWith(TRASH_PREFIX)) return { ok: false, d };
+                const obj = await env.MAIL_BUCKET.get(key);
+                if (!obj) return { ok: false, d };
+                const md = Object.assign({}, obj.customMetadata);
+                const want = action === 'mark_read' ? 'true' : 'false';
+                if (md.isRead === want) return { ok: false, d };
+                d.unread = action === 'mark_read' ? -1 : 1;
+                md.isRead = want;
+                await env.MAIL_BUCKET.put(key, obj.body, { customMetadata: md });
+                return { ok: true, d };
+            }
+            if (action === 'star' || action === 'unstar') {
+                if (key.startsWith(TRASH_PREFIX)) return { ok: false, d };
+                const obj = await env.MAIL_BUCKET.get(key);
+                if (!obj) return { ok: false, d };
+                const md = Object.assign({}, obj.customMetadata);
+                const want = action === 'star' ? 'true' : 'false';
+                if (md.isStarred === want) return { ok: false, d };
+                d.starred = action === 'star' ? 1 : -1;
+                md.isStarred = want;
+                await env.MAIL_BUCKET.put(key, obj.body, { customMetadata: md });
+                return { ok: true, d };
+            }
+            return { ok: false, d };
+        };
+
+        // 5 路并发：原来是 for+await 串行，50 封就是 100+ 次串行 R2 调用
+        const results = await eachLimit(keys, 5, applyOne);
+        for (const r of results) {
+            if (!r.ok) continue;
+            done++;
+            for (const k of ['total', 'unread', 'starred', 'trash']) totals[k] += r.d[k];
+        }
+        if (done) await bumpCounts(env, totals);
+
+        // 回跳：白名单校验防开放重定向；保留 q/limit 搜索条件，回到之前的视图
         const nextRaw = String(fd.get('next') || '');
         const next = nextRaw.indexOf('/trash') === 0 ? '/trash' : (nextRaw === '/starred' ? '/starred' : '/');
+        const qs = [];
+        const lim = parseInt(String(fd.get('limit') || ''), 10);
+        if (Number.isFinite(lim)) qs.push('limit=' + Math.min(Math.max(lim, PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX));
+        const q = String(fd.get('q') || '').trim().slice(0, 100);
+        if (q) qs.push('q=' + encodeURIComponent(q));
         const actionLabel = {
             delete: '已移入回收站', purge: '已彻底删除', restore: '已恢复到收件箱',
             mark_read: '已标记为已读', mark_unread: '已标记为未读',
             star: '已加星标', unstar: '已取消星标'
         }[action] || '操作完成';
-        const toastMsg = done > 0 ? (actionLabel + '（' + done + ' 封）') : '没有选中任何邮件';
-        return Response.redirect(url.origin + next + '?toast=' + encodeURIComponent(toastMsg), 302);
+        qs.push('toast=' + encodeURIComponent(done > 0 ? (actionLabel + '（' + done + ' 封）') : '没有选中任何邮件'));
+        return Response.redirect(url.origin + next + '?' + qs.join('&'), 302);
     }
 
     if (url.pathname.startsWith('/frame/')) {
@@ -3086,33 +3243,40 @@ async function handleRequest(request, env, ctx) {
         // 只读一次 body：R2ObjectBody 的流被消费后不能重复读取
         const buffer = await resolved.obj.arrayBuffer();
         const meta0 = resolved.obj.customMetadata || {};
-        if (!resolved.isTrash && meta0.isRead !== 'true') {
+        const willMarkRead = !resolved.isTrash && meta0.isRead !== 'true';
+        if (willMarkRead) {
             // ⚠️ 必须保留已有 customMetadata（isStarred 等），不能只写 isRead ——
             // 否则打开一封星标邮件就会悄悄抹掉它的星标。
             ctx.waitUntil(env.MAIL_BUCKET.put(resolved.key, buffer, { customMetadata: Object.assign({}, meta0, { isRead: 'true' }) }));
         }
 
-        // 上一封 / 下一封：在同目录按时间排序后定位邻居；顺手算出侧栏徽标数
-        let prevKey = null, nextKey = null, dUnread = 0, dStar = 0;
+        // 上一封 / 下一封：单次列举定位邻居；同一趟数据顺手校准计数缓存
+        // （徽标不再单独列举，直接用这里的权威值，零额外开销）
+        let prevKey = null, nextKey = null, counts = null;
         try {
             const dAll = await listAllObjects(env);
-            const dMails = (resolved.isTrash
-                ? dAll.filter(o => o.key.startsWith(TRASH_PREFIX))
-                : dAll.filter(o => isMailKey(o.key))
-            ).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
-            for (const m of dMails) {
-                const md = m.customMetadata || {};
-                if (!resolved.isTrash) {
-                    if (md.isRead !== 'true') dUnread++;
-                    if (md.isStarred === 'true') dStar++;
-                }
+            counts = { total: 0, unread: 0, starred: 0, trash: 0 };
+            const dMails = [];
+            for (const o of dAll) {
+                if (o.key.startsWith(TRASH_PREFIX)) { counts.trash++; if (resolved.isTrash) dMails.push(o); continue; }
+                if (!isMailKey(o.key)) continue;
+                counts.total++;
+                const md = o.customMetadata || {};
+                if (md.isRead !== 'true') counts.unread++;
+                if (md.isStarred === 'true') counts.starred++;
+                if (!resolved.isTrash) dMails.push(o);
             }
+            dMails.sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
             const di = dMails.findIndex(m => m.key === resolved.key);
             if (di >= 0) {
                 if (di > 0) prevKey = dMails[di - 1].key;
                 if (di < dMails.length - 1) nextKey = dMails[di + 1].key;
             }
+            // 本次打开会把这封标为已读，计数里先减掉，免得徽标本次闪一下旧值
+            if (willMarkRead && counts.unread > 0) counts.unread--;
+            ctx.waitUntil(putCounts(env, counts));
         } catch (e) {}
+        const badge = counts || (await countsOrRefresh(env));
 
         const email = processEmail(bufferToBinaryString(buffer));
         return htmlResponse(renderLayout(
@@ -3124,7 +3288,7 @@ async function handleRequest(request, env, ctx) {
             }),
             resolved.isTrash ? 'trash' : 'inbox',
             0,
-            { unreadCount: dUnread, starCount: dStar }
+            { unreadCount: badge.unread, starCount: badge.starred }
         ));
     }
 
@@ -3149,6 +3313,10 @@ async function handleRequest(request, env, ctx) {
         let emails = isTrashPage ? trashMails : inboxMails;
         if (isStarredPage) emails = inboxMails.filter(o => (o.customMetadata || {}).isStarred === 'true');
 
+        // 只看未读（收件箱 / 星标页），和搜索可叠加
+        const unreadOnly = !isTrashPage && url.searchParams.get('unread') === '1';
+        if (unreadOnly) emails = emails.filter(o => (o.customMetadata || {}).isRead !== 'true');
+
         const displayKeyOf = o => (isTrashPage ? o.key.replace(TRASH_PREFIX, '') : o.key);
 
         // 搜索：只匹配主题与发件人。键名里存的就是入库时解码好的明文，
@@ -3170,6 +3338,9 @@ async function handleRequest(request, env, ctx) {
         const shown = matched.slice(0, pageSize);
         const nextSize = Math.min(pageSize * 2, PAGE_SIZE_MAX);
         const hasMore = matched.length > shown.length;
+
+        // 列表页是计数的权威数据源：渲染完顺手校准缓存（waitUntil，不阻塞响应）
+        ctx.waitUntil(putCounts(env, { total: inboxMails.length, unread: unreadCount, starred: starCount, trash: trashMails.length }));
 
         const rows = shown.map(e => {
             const fullKey = e.key;
@@ -3206,12 +3377,21 @@ async function handleRequest(request, env, ctx) {
             trash: { icon: Icons.trash, title: '回收站是空的', desc: '被删除的邮件会在这里保留，彻底删除后无法恢复。' }
         }[LIST_MODE];
         if (query) { emptyCfg.title = '没有匹配的邮件'; emptyCfg.desc = '换个关键词试试。搜索范围是主题与发件人。'; }
+        else if (unreadOnly) { emptyCfg.icon = Icons.checkAll; emptyCfg.title = '没有未读邮件'; emptyCfg.desc = '干得漂亮，收件箱已清空。'; }
 
         const searchAction = LIST_MODE === 'trash' ? '/trash' : (LIST_MODE === 'starred' ? '/starred' : '/');
         const countLine = query
             ? ('找到 ' + matched.length + ' 封匹配「' + query + '」的邮件')
-            : ('共 ' + emails.length + ' 封邮件' + (hasMore ? '，当前显示最新 ' + shown.length + ' 封' : ''));
-        const nextHref = searchAction + '?limit=' + nextSize + (query ? '&q=' + encodeURIComponent(query) : '');
+            : (unreadOnly
+                ? ('共 ' + emails.length + ' 封未读邮件')
+                : ('共 ' + emails.length + ' 封邮件' + (hasMore ? '，当前显示最新 ' + shown.length + ' 封' : '')));
+        const nextHref = searchAction + '?limit=' + nextSize + (query ? '&q=' + encodeURIComponent(query) : '') + (unreadOnly ? '&unread=1' : '');
+
+        // 未读筛选开关：保留搜索词
+        const toggleParams = [];
+        if (query) toggleParams.push('q=' + encodeURIComponent(query));
+        if (!unreadOnly) toggleParams.push('unread=1');
+        const filterToggleHref = searchAction + (toggleParams.length ? '?' + toggleParams.join('&') : '');
 
         // 收件箱首页轮询新邮件用：最新一封的时间戳
         const latestTimestamp = LIST_MODE === 'inbox' && inboxMails.length > 0 ? keyTimestamp(inboxMails[0].key) : 0;
@@ -3224,12 +3404,16 @@ async function handleRequest(request, env, ctx) {
             query: query,
             searchAction: searchAction,
             nextValue: searchAction,
+            pageSizeAttr: escapeAttr(String(pageSize)),
             rows: rows,
             empty: { icon: emptyCfg.icon, title: escapeHtml(emptyCfg.title), desc: escapeHtml(emptyCfg.desc) },
             hasMore: hasMore,
             nextHrefAttr: escapeAttr(nextHref),
             remaining: matched.length - shown.length,
-            showMarkAllRead: LIST_MODE === 'inbox' && unreadCount > 0
+            showMarkAllRead: LIST_MODE === 'inbox' && unreadCount > 0,
+            unreadOnly: unreadOnly,
+            filterToggleHref: escapeAttr(filterToggleHref),
+            showEmptyTrash: isTrashPage && trashMails.length > 0
         });
         return htmlResponse(renderLayout(html, LIST_MODE, latestTimestamp, {
             unreadCount: unreadCount, starCount: starCount, trashCount: trashMails.length
@@ -3286,6 +3470,8 @@ export default {
         try {
             const rawData = await new Response(message.raw).arrayBuffer();
             await env.MAIL_BUCKET.put(key, rawData, { customMetadata: { isRead: 'false' } });
+            // 增量维护计数缓存：新邮件 total+1、unread+1
+            ctx.waitUntil(bumpCounts(env, { total: 1, unread: 1 }));
             // 更新「最新邮件」标记，供前端每 15 秒的轮询直接读取（避免全量列举）。
             // 与键名用同一个 now，保证页面里的 CURRENT_PAGE_LATEST_TS 与它可直接比较。
             try {
