@@ -648,6 +648,16 @@ function clampText(value, max) {
     return s.slice(0, cut);
 }
 
+// 构造 v2 邮件键名：<时间戳>_<发件人长度>_<发件人><主题>.eml
+// "/" 仍然要换成 "-"：它会被 encodeURIComponent 转成 %2F 放进 URL 路径，
+// 万一被中间层还原就会把 /email/<key> 的路径切坏。
+// 入库与「修复发件人显示」共用，保证两处拼出来的键名格式永远一致。
+function buildMailKey(from, subject, now) {
+    const keyFrom = String(from).replace(/[\/\\]/g, '-');
+    const keySubject = String(subject).replace(/[\/\\]/g, '-');
+    return now + '_' + keyFrom.length + '_' + keyFrom + keySubject + '.eml';
+}
+
 // 从 R2 键名还原发件人与主题。
 //
 // v2（当前）：<时间戳>_<发件人长度>_<发件人><主题>.eml
@@ -2105,6 +2115,15 @@ function renderSettings(settings, turnstile, forward, opts) {
                                 <button type="submit" class="btn btn-primary">保存显示设置</button>
                             </div>
                         </form>
+                        <form method="POST" action="/repair-senders" onsubmit="return confirm('将逐封读取邮件原文，用真实的 From 发件人重建列表显示。邮件较多时可能需要几十秒，确定继续吗？')">
+                            <div class="switch-row" style="border-top:1px dashed var(--border);margin-top:.5rem">
+                                <div>
+                                    <div class="font-semibold text-sm" style="color:var(--text-1)">修复历史邮件的发件人显示</div>
+                                    <div class="text-xs mt-0.5" style="color:var(--text-3)">此前入库的邮件用了信封发件人，列表里会显示 Gmail 转发地址、退信 VERP 地址等乱码，一键按原文 From 头重建（之后的新邮件不受影响）</div>
+                                </div>
+                                <button type="submit" class="btn">开始修复</button>
+                            </div>
+                        </form>
                     </section>
 
                     <section class="panel">
@@ -3047,13 +3066,19 @@ async function handleRequest(request, env, ctx) {
             return Response.redirect(url.origin + '/settings?saved=1', 302);
         }
 
-        const notice = url.searchParams.get('saved')
+        const repairedParam = url.searchParams.get('repaired');
+        const repairFailed = parseInt(url.searchParams.get('repair_failed') || '0', 10);
+        const notice = repairedParam !== null
+            ? ('发件人显示修复完成：' + repairedParam + ' 封已更新，'
+                + (url.searchParams.get('repair_skipped') || '0') + ' 封无需处理'
+                + (repairFailed > 0 ? ('，' + repairFailed + ' 封失败（详见 Worker 日志）') : '') + '。')
+            : (url.searchParams.get('saved')
             ? '设置已保存。'
             : (url.searchParams.get('cleared')
                 ? 'Turnstile 密钥已清空。'
                 : (url.searchParams.get('pwchanged')
                     ? '密码已更新，其它设备上的登录已失效。'
-                    : (url.searchParams.get('loggedout') ? '已退出其他设备上的登录，本机不受影响。' : '')));
+                    : (url.searchParams.get('loggedout') ? '已退出其他设备上的登录，本机不受影响。' : ''))));
 
         return htmlResponse(renderLayout(
             renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice, stats: stats }),
@@ -3176,6 +3201,77 @@ async function handleRequest(request, env, ctx) {
             }
         }
         return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent('已恢复到收件箱'), 302);
+    }
+
+    // ---------- 修复历史邮件的发件人显示 ----------
+    // 根因见入库处的注释：老版本把「信封发件人」写进了键名，列表页于是显示
+    // Gmail 转发 SRS 地址 / VERP 退信地址这类乱码。这里逐封读取 .eml 原文，
+    // 用真实的 From: 头重建 v2 键名并改名；主题也顺手按原文重建（v1 老键的
+    // 主题可能被当年的文件名清洗弄坏过）。
+    // 保留：原时间戳（排序不变）、customMetadata（已读/星标）、回收站位置、
+    // 译文缓存（按新键名搬过去，不浪费 AI 额度重翻）。
+    if (url.pathname === '/repair-senders' && method === 'POST') {
+        const objects = await listAllObjects(env);
+        const jobs = objects.filter(o => {
+            const k = String(o.key || '');
+            if (!k || k === CONFIG_FILE || k.startsWith(SYS_PREFIX)) return false;
+            const dk = k.startsWith(TRASH_PREFIX) ? k.slice(TRASH_PREFIX.length) : k;
+            return /\.eml$/i.test(dk);
+        });
+        let fixed = 0, skipped = 0, failed = 0;
+        const deleteOld = [];
+        const usedNewKeys = new Set();
+        await eachChunk(jobs, async (o) => {
+            try {
+                const oldKey = o.key;
+                const inTrash = oldKey.startsWith(TRASH_PREFIX);
+                const displayKey = inTrash ? oldKey.slice(TRASH_PREFIX.length) : oldKey;
+                const obj = await env.MAIL_BUCKET.get(oldKey);
+                if (!obj) { skipped++; return; }
+                // 与详情页完全相同的读取姿势：arrayBuffer → 二进制串 → processEmail，
+                // 保证解析出的 From/Subject 和详情页看到的一致。
+                const buf = await obj.arrayBuffer();
+                const email = processEmail(bufferToBinaryString(buf));
+                const fromHeader = String(email.headers['from'] || email.headers['sender'] || '').trim();
+                const oldMeta = parseKeyMeta(displayKey);
+                // 实在没有 From 头的古怪邮件：退回用键里原来的值，不动它
+                const correctFrom = clampText(fromHeader.replace(/[\r\n]+/g, ' ').trim(), 120)
+                    || oldMeta.from.trim() || 'Unknown';
+                const subject = clampText(
+                    String(email.headers['subject'] || '').replace(/[\r\n]+/g, ' ').trim(), 120
+                ) || 'No_Subject';
+                const ts = keyTimestamp(displayKey) || Date.now();
+                const newDisplayKey = buildMailKey(correctFrom, subject, ts);
+                if (newDisplayKey === displayKey) { skipped++; return; }
+                const newKey = (inTrash ? TRASH_PREFIX : '') + newDisplayKey;
+                // 防极端碰撞（同毫秒+同发件人+同主题）：宁可跳过也不覆盖丢邮件
+                if (usedNewKeys.has(newKey)) { failed++; return; }
+                usedNewKeys.add(newKey);
+                try { if (await env.MAIL_BUCKET.head(newKey)) { failed++; return; } } catch (e) {}
+                const md = Object.assign({}, obj.customMetadata);
+                await env.MAIL_BUCKET.put(newKey, buf, { customMetadata: md });
+                // 译文缓存的键是按邮件键名哈希的：改名后搬过去，免得重翻浪费额度
+                try {
+                    const oldCacheKey = await translationCacheKey(displayKey);
+                    const cached = await env.MAIL_BUCKET.get(oldCacheKey);
+                    if (cached) {
+                        const newCacheKey = await translationCacheKey(newDisplayKey);
+                        await env.MAIL_BUCKET.put(newCacheKey, await cached.arrayBuffer(), {
+                            httpMetadata: { contentType: 'text/html; charset=utf-8' }
+                        });
+                        deleteOld.push(oldCacheKey);
+                    }
+                } catch (e) { /* 缓存搬运失败不影响主流程 */ }
+                deleteOld.push(oldKey);
+                fixed++;
+            } catch (e) { failed++; }
+        });
+        // 第二阶段：一次批量删除所有旧键（N 次 DELETE 合并成 1 个子请求）
+        await bulkDelete(env, deleteOld);
+        return Response.redirect(
+            url.origin + '/settings?repaired=' + fixed + '&repair_skipped=' + skipped + '&repair_failed=' + failed,
+            302
+        );
     }
 
     if (url.pathname === '/batch-action' && method === 'POST') {
@@ -3598,18 +3694,20 @@ export default {
             decodeHeaderValue(message.headers.get('subject') || 'No_Subject').replace(/[\r\n]+/g, ' ').trim(),
             120
         ) || 'No_Subject';
+        // 【核心修复 · 发件人显示】列表展示的发件人必须取自 From: 头，绝不能用 message.from。
+        // message.from 是信封发件人（envelope MAIL FROM，见 Cloudflare 官方文档）：
+        // 经 Gmail 转发后它会被改写成 `xxx+caf_=domain=user@gmail.com` 这种 SRS 地址，
+        // 退信/营销邮件的 VERP 地址同理 —— 只有 From: 头才是发件人真正署的名。
+        // （实测：Google 官方通知邮件在列表里显示成一串 Gmail 转发地址，就是这个原因。）
+        // 优先级：From > Sender（代发场景）> 信封发件人（兜底）。
+        const fromHeaderRaw = message.headers.get('from') || message.headers.get('sender') || '';
         const from = clampText(
-            decodeHeaderValue(message.from || 'Unknown').replace(/[\r\n]+/g, ' ').trim(),
+            decodeHeaderValue(fromHeaderRaw || message.from || 'Unknown').replace(/[\r\n]+/g, ' ').trim(),
             120
         ) || 'Unknown';
 
-        // 键名格式 v2：<时间戳>_<发件人长度>_<发件人><主题>.eml
-        // "/" 仍然要换成 "-"：它会被 encodeURIComponent 转成 %2F 放进 URL 路径，
-        // 万一被中间层还原就会把 /email/<key> 的路径切坏。
-        const keyFrom = from.replace(/[\/\\]/g, '-');
-        const keySubject = subject.replace(/[\/\\]/g, '-');
         const now = Date.now();
-        const key = now + '_' + keyFrom.length + '_' + keyFrom + keySubject + '.eml';
+        const key = buildMailKey(from, subject, now);
 
         try {
             const rawData = await new Response(message.raw).arrayBuffer();
