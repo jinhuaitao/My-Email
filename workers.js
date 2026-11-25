@@ -4019,9 +4019,12 @@ async function handleRequest(request, env, ctx) {
             const isStarred = (e.customMetadata || {}).isStarred === 'true';
             // 主题与发件人完全由发件人控制，必须转义后才能拼进 HTML；
             // data-key 走 encodeURIComponent + escapeAttr，行点击用事件委托（防 XSS）。
+            // ⚠️ data-key 必须用完整键（含 sent/ / trash/ 前缀），不能用 displayKey：
+            //    已发送邮件若去掉 sent/ 前缀，/email/<key> 就找不到对象 → resolveEmailKey
+            //    返回 null → 302 跳回收件箱（点开已发送邮件却跳走，就是这个 bug）。
             return {
                 fullKeyAttr: escapeAttr(fullKey),
-                dataKeyAttr: escapeAttr(encodeURIComponent(displayKey)),
+                dataKeyAttr: escapeAttr(encodeURIComponent(fullKey)),
                 senderName: escapeHtml(senderName),
                 subject: escapeHtml(subject),
                 ts: ts,
