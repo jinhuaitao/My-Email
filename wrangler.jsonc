@@ -40,7 +40,25 @@
   // 绑定本身不产生费用，只有真正点「翻译」时才按 token 计费。
   // 若完全不希望正文离开 Cloudflare，删掉这一行即可 —— 翻译按钮会给出
   // 「未绑定 Workers AI」的可读提示，其余功能不受影响。
-  "ai": { "binding": "AI" }
+  "ai": { "binding": "AI" },
+
+  // ===========================================================================
+  // 发信绑定（Email Sending on Workers Free，2026-11-24 起免费版可用）
+  // 用途：「写邮件」页调用 env.EMAIL.send() 发送邮件。
+  //
+  // ⚠️ 前置条件：
+  //   1. 发件人地址的域名必须 onboard 到 Cloudflare Email Service
+  //      （Compute → Email Service → Email Sending → Onboard Domain，配置 SPF/DKIM/DMARC）。
+  //   2. Workers 免费版只能发给账号中「已验证的目标地址」（Email Routing → Destination
+  //      Addresses 里添加并验证），发往任意地址需升级 Workers 付费版，否则报
+  //      E_RECIPIENT_PLAN_RESTRICTED。发给已验证地址永久免费、不计配额。
+  //
+  // 可用限制属性（可选，见 send-bindings 文档）：
+  //   { "name": "EMAIL", "allowed_sender_addresses": ["me@yourdomain.com"] }
+  //   { "name": "EMAIL", "allowed_destination_addresses": ["team@yourdomain.com"] }
+  //   { "name": "EMAIL", "destination_address": "ops@yourdomain.com" }
+  // ===========================================================================
+  "send_email": [{ "name": "EMAIL" }]
 
   // ===========================================================================
   // 环境变量 —— 这里刻意全部注释掉，不要写占位值或空字符串！
@@ -53,6 +71,7 @@
   //   → Variables and Secrets 里配置：
   //
   //   FORWARD_EMAIL         类型 Text    收件后自动转发到这个邮箱，留空 = 不转发
+  //   SEND_FROM             类型 Text    发件人地址（须为已 onboard 的域名），留空则需在应用内设置
   //   TURNSTILE_SITE_KEY    类型 Text    Turnstile 的 Site Key（公开值）
   //   TURNSTILE_SECRET_KEY  类型 Secret  Turnstile 的 Secret Key（密钥，必须加密存储）
   //

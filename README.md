@@ -1,7 +1,35 @@
 # CF Webmail · Cloudflare Workers 无服务器邮箱
 
-> **v2.3 设置页重构版** —— 前端界面从零重建，后端逻辑（MIME 解析、鉴权、翻译、入库）保持不变，
-> 可直接替换原 `workers.js` 部署，已有 R2 数据完全兼容。
+> **v2.4 发信版** —— 基于 Cloudflare 2026-11-24 的「Email Sending on Workers Free」，新增**写邮件 / 发送 / 回复 / 已发送留档**。
+> 原有收信逻辑（MIME 解析、鉴权、翻译、入库）完全不变，已有 R2 数据兼容。新增能力需要 `send_email` 绑定与发件域名 onboard（见下文）。
+
+## v2.4 发送邮件
+
+Cloudflare 从 2026-11-24 起把 Email Sending 开放给 Workers **免费版**，本项目据此补上了发信闭环：
+
+| 能力 | 说明 |
+| --- | --- |
+| **写邮件** | 侧栏「写邮件」按钮 + 列表页撰写入口。收件人 / 主题 / 纯文本正文，支持多个收件人（逗号分隔，最多 50 个） |
+| **回复** | 详情页「回复」按钮，预填收件人、主题（`Re:`）与引用正文。已发送邮件的「回复」即再次发给原收件人 |
+| **已发送留档** | 发出的邮件以标准 `.eml` 存到 `sent/` 前缀，侧栏「已发送」可查看、下载原文、彻底删除，复用现有详情 / 翻译体系 |
+| **发件人可配置** | 「设置 → 发件设置」填写；取值按 应用内设置 → `SEND_FROM` 环境变量 → 未配置 三段式回退 |
+| **错误人话化** | `E_RECIPIENT_PLAN_RESTRICTED` 等底层错误码翻成可行动提示（例如"免费版只能发给已验证的目标地址"） |
+
+### ⚠️ 免费版的发送限制（务必先读）
+
+- **只能发给账号中「已验证的目标地址」**：即 Cloudflare 控制台 `Email Service → Email Routing → Destination Addresses` 里添加并验证过的邮箱。发给其它地址会报 `E_RECIPIENT_PLAN_RESTRICTED`。
+- **发给已验证地址永久免费**，不计入月配额或每日发送额度。
+- **发给任意地址需升级 Workers 付费版**并 onboard 发送域名。
+- **发件人地址的域名必须 onboard 到 Email Service**（配置 SPF / DKIM / DMARC），否则报 `E_SENDER_DOMAIN_NOT_AVAILABLE`。DNS 生效通常 5–15 分钟。
+
+### 部署步骤（在原步骤基础上）
+
+1. `wrangler.jsonc` 已包含 `"send_email": [{ "name": "EMAIL" }]`，Dashboard 连接 Git 部署会自动创建该绑定（本地 `wrangler deploy` 亦然）。
+2. 到 Cloudflare 控制台 **Compute → Email Service → Email Sending → Onboard Domain**，onboard 你的发件域名（自动写入 `cf-bounce` 的 MX / SPF / DKIM / DMARC）。
+3. 登录后到 **设置 → 发件设置** 填入发件人地址（如 `me@yourdomain.com`），或设 `SEND_FROM` 环境变量。
+4. 免费版测试时，把收件邮箱加入 **Destination Addresses** 并验证；之后即可「写邮件」发送。
+
+> 若 `EMAIL` 绑定缺失，撰写页会给出明确提示而不是白屏；此时收信功能不受影响。
 
 ## v2.3 设置页重构
 
@@ -75,6 +103,7 @@
 
 - [特性](#特性)
 - [架构](#架构)
+- [发送邮件](#发送邮件v24-发送邮件)（见顶部 v2.4）
 - [项目结构](#项目结构)
 - [部署（Dashboard 连接 GitHub，推荐）](#部署dashboard-连接-github推荐)
 - [应用内配置（部署后无需打开控制台）](#应用内配置部署后无需打开控制台)
@@ -93,6 +122,7 @@
 
 | 能力 | 说明 |
 | --- | --- |
+| **写邮件 / 发送 / 回复** | 基于 Workers Free 的 Email Sending（`env.EMAIL.send()`）。免费版只能发给已验证的目标地址，发给已验证地址永久免费、不计配额；已发送邮件自动留档 |
 | **一键部署** | `wrangler.jsonc` 里 R2 只写绑定名、不写桶名 → 首次部署时 Cloudflare **自动创建 R2 桶并自动绑定**，无需手工建资源 |
 | **免控制台点资源** | R2 / Workers AI 绑定全部由配置文件驱动；只有三个可选变量需要在 Dashboard 填一次 |
 | **健壮的 MIME 解析内核** | base64 / quoted-printable、嵌套 multipart、RFC 2047 头部折叠（Header Folding）、**Q 编码里 `_`=空格**的正确还原、RFC 2231 参数值的严格识别、GBK 乱码自动嗅探回退 |
@@ -158,6 +188,7 @@ Cloudflare Email Routing ──(Send to a Worker)──▶  Worker.email()
 | 文件 | 说明 |
 | --- | --- |
 | `workers.js` | 全部业务代码：前端页面 + 邮件接收 + MIME 解析 + 路由（单文件 Worker） |
+| `tests/sending.test.mjs` | **零依赖**发信回归测试：桩 R2 + 桩 `EMAIL.send()` + 桩 ctx，端到端覆盖撰写页、发送成功、`.eml` 留档、计数、已发送列表 / 详情、回复预填、错误码翻译、参数校验、彻底删除。运行 `node tests/sending.test.mjs` |
 | `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 桩 Workers AI + 直接调 `fetch` / `email()`，**78 条用例**覆盖登录、鉴权、XSS、沙箱、附件、批量操作、正文翻译、设置页、改密码与会话轮换、列表分页与搜索、时区显示、`/raw` 下载、邮件入库与键名还原、历史数据抢救、正文高度回报 |
 | `tools/render-preview.mjs` | 把初始化页与登录页渲染成静态 HTML，生成 `.preview/compare.html` 左右对比（`npm run preview`） |
 | `tools/verify-frame-height.mjs` | 用无头 Chrome 验证正文 iframe 高度自适应**不会陷入正反馈**（`npm run verify:frame`）。Node 里没有布局引擎，这类布局 bug 只能真跑浏览器才测得出来 |
@@ -383,12 +414,14 @@ env.AI                  AI
 | --- | --- | --- | --- |
 | `MAIL_BUCKET` | R2 桶 | `wrangler.jsonc` 自动创建 | `env.MAIL_BUCKET` |
 | `AI` | Workers AI | `wrangler.jsonc` 自动绑定 | `env.AI`（用于正文翻译） |
+| `EMAIL` | Email Sending | `wrangler.jsonc` 的 `send_email` 自动绑定 | `env.EMAIL.send()`（用于写邮件 / 回复） |
 
 ### 变量
 
 | 变量 | 类型 | 默认行为 | 代码中的用法 |
 | --- | --- | --- | --- |
 | `FORWARD_EMAIL` | 文本 | 未设置 → 不转发 | 存库成功后调用 `message.forward()` |
+| `SEND_FROM` | 文本 | 未设置 → 需在应用内「发件设置」填写 | `env.EMAIL.send()` 的 `from`，域名须已 onboard |
 | `TURNSTILE_SITE_KEY` | 文本 | 未设置 → 登录页不渲染验证码 | 注入登录页 `data-sitekey` |
 | `TURNSTILE_SECRET_KEY` | 密钥 | 未设置 → 跳过服务端校验 | 调 Turnstile `siteverify` |
 
@@ -458,6 +491,11 @@ env.AI                  AI
 | 改完密码后其它设备还登着 | 老版本没有改密码入口。新版在设置页提供，并且**轮换会话 token**：改密码成功即作废旧 token，其它设备下次请求就被踢回登录页 |
 | 忘记管理员密码 | 删除 R2 中的 `sys_config.json`，重新访问站点即回到初始化页面（**注意：会一并清掉会话**） |
 | 想改成单文件版本 | 把 `workers.js` 改名为 `_worker.js` 放进 Cloudflare Pages 的静态目录即可 |
+| 点「发送」提示"未绑定 send_email" | `wrangler.jsonc` 缺 `"send_email": [{ "name": "EMAIL" }]`，补上后重新部署 |
+| 点「发送」提示"发件域名未 onboard" | 到 Cloudflare 控制台 Compute → Email Service → Email Sending → Onboard Domain，配置 SPF / DKIM / DMARC，等 DNS 生效（5–15 分钟） |
+| 点「发送」提示"只能发送给已验证的目标地址" | 免费版限制：把收件邮箱加到 Email Routing → Destination Addresses 并验证；发给任意地址需升级 Workers 付费版 |
+| 点「发送」报 `E_RATE_LIMIT_EXCEEDED` / `E_DAILY_LIMIT_EXCEEDED` | 触发发送限流或当日额度。发给已验证地址不计入额度；若发给任意地址，等额度恢复或申请提额 |
+| 已发送列表里显示的不是发件人而是收件人 | 这是刻意设计：与 Gmail「已发送」一致，那列显示收件人；点开详情可看到准确的 From / To 头 |
 
 查看线上日志：Dashboard → 你的 Worker → **Logs**，或本地 `npm run tail`。
 

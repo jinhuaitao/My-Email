@@ -1,6 +1,13 @@
 /**
- * Cloudflare Workers 邮箱客户端 - v12.0 (终极重构解析内核版)
- * 更新内容：
+ * Cloudflare Workers 邮箱客户端 - v13.0 (发信版)
+ * v13 更新（基于 2026-11-24 Cloudflare「Email Sending on Workers Free」）：
+ * 1. 新增「撰写 / 发送」：send_email 绑定 → env.EMAIL.send()，含免费版收件人限制的可读提示。
+ * 2. 发出的邮件以标准 RFC5322 .eml 留档到 sent/ 前缀，复用列表 / 详情 / 原文下载 / 翻译全套逻辑。
+ * 3. 设置页新增「发件设置」：发件人地址（应用内设置 → SEND_FROM 环境变量 → 未配置）。
+ * 4. 详情页新增「回复」快捷入口，预填收件人、主题与引用正文。
+ * 5. 侧栏与列表新增「已发送」视图，计数缓存增量维护 sent。
+ *
+ * v12.0 更新内容：
  * 1. 彻底攻克 Header Folding (头部折叠) Bug：精准重组跨行 Boundary 和解码声明。
  * 2. 引入智能 \uFFFD (菱形乱码) 嗅探器：自动捕获未声明 charset 的哑巴 GBK 邮件并强制回退解码。
  * 3. 使用双换行 (\r\n\r\n) 的绝对标准定位 Body，免疫魔方等系统的畸形空行。
@@ -10,6 +17,9 @@
 const CONFIG_FILE = 'sys_config.json';
 const SESSION_NAME = 'auth_session';
 const TRASH_PREFIX = 'trash/';
+
+// 已发送邮件前缀。发出的邮件以标准 .eml 留档到这里，与收件箱 / 回收站隔离。
+const SENT_PREFIX = 'sent/';
 
 // 内部系统键前缀。登录限流计数等放在这里，永远不会出现在邮件列表里。
 const SYS_PREFIX = '_sys/';
@@ -603,15 +613,17 @@ function processEmail(rawText) {
 }
 
 // 从 R2 键名里取出时间戳。键名格式异常时返回 0，避免 NaN 污染排序与「最新邮件」判断。
+// trash/ 与 sent/ 前缀都要剥掉：已发送邮件的键名同样以时间戳开头。
 function keyTimestamp(key) {
-    const parts = String(key).replace(TRASH_PREFIX, '').split('_');
+    const parts = String(key).replace(TRASH_PREFIX, '').replace(SENT_PREFIX, '').split('_');
     const ts = parseInt(parts[0], 10);
     return Number.isFinite(ts) ? ts : 0;
 }
 
-// 收件箱里「是邮件」的键：排除配置文件、内部系统键、回收站键
+// 收件箱里「是邮件」的键：排除配置文件、内部系统键、回收站键、已发送键
 function isMailKey(key) {
-    return key !== CONFIG_FILE && !key.startsWith(SYS_PREFIX) && !key.startsWith(TRASH_PREFIX);
+    return key !== CONFIG_FILE && !key.startsWith(SYS_PREFIX)
+        && !key.startsWith(TRASH_PREFIX) && !key.startsWith(SENT_PREFIX);
 }
 
 // 翻页列举全部对象。
@@ -1087,15 +1099,138 @@ function safeDecode(value) {
     try { return decodeURIComponent(String(value || '')); } catch (e) { return ''; }
 }
 
+// ==========================================
+// 发信辅助（send_email 绑定）
+// ==========================================
+
+// 发件人地址：三段式回退，与转发 / Turnstile 一致（应用内设置 → 环境变量 → 未配置）。
+// 注意 Cloudflare Email Sending 要求 from 的域名已 onboard 到 Email Service，
+// 否则发送时报 E_SENDER_DOMAIN_NOT_AVAILABLE —— 这一点在界面上会给出可读提示。
+function resolveSendFrom(settings, env) {
+    const fromSettings = cleanStr(settings.sendFrom);
+    if (fromSettings) return { value: fromSettings, source: 'settings' };
+    const fromEnv = cleanStr(env.SEND_FROM);
+    if (fromEnv) return { value: fromEnv, source: 'env' };
+    return { value: '', source: 'none' };
+}
+
+// 把底层发信错误翻成用户能看懂、能行动的一句话。
+// 免费版最重要的限制：只能发给「已验证的目标地址」，否则报 E_RECIPIENT_PLAN_RESTRICTED。
+function describeSendFailure(error) {
+    const code = String((error && error.code) || '');
+    const msg = String((error && error.message) || '');
+    switch (code) {
+        case 'E_RECIPIENT_PLAN_RESTRICTED':
+            return '当前 Workers 为免费版：只能发送给账号中「已验证的目标地址」。请到 Cloudflare 控制台 Email Service → Email Routing → Destination Addresses 添加并验证该收件邮箱；若需发给任意地址，请升级到 Workers 付费版。';
+        case 'E_RECIPIENT_NOT_ALLOWED':
+            return '收件人被 send_email 绑定的目标地址白名单拒绝。请检查 wrangler.jsonc 里 EMAIL 绑定的 destination_address / allowed_destination_addresses 配置。';
+        case 'E_SENDER_NOT_VERIFIED':
+            return '发件人地址不在 EMAIL 绑定的 allowed_sender_addresses 白名单里，或发送域名未验证。';
+        case 'E_SENDER_DOMAIN_NOT_AVAILABLE':
+            return '发件域名未 onboard 到 Email Service。请到 Cloudflare 控制台 onboard 发送域名（配置 SPF / DKIM / DMARC），或把「发件设置」里的地址改成已启用的域名。';
+        case 'E_SENDER_DOMAIN_NOT_CONFIGURED':
+        case 'E_EMAIL_SENDING_NOT_READY':
+            return '发件域名尚未完成 Email Sending 配置（DNS 生效通常需要 5–15 分钟），请稍后重试。';
+        case 'E_VALIDATION_ERROR':
+        case 'E_FIELD_MISSING':
+            return '邮件内容不合法：请确认收件人地址格式正确，且主题或正文不为空。' + (msg ? '（' + msg + '）' : '');
+        case 'E_TOO_MANY_RECIPIENTS':
+            return '收件人总数（含抄送 / 密送）超过 50 个上限。';
+        case 'E_CONTENT_TOO_LARGE':
+            return '邮件体积超过 25 MiB 上限（含附件）。';
+        case 'E_DAILY_LIMIT_EXCEEDED':
+            return '今日发送额度已用尽，请明天再试（发往已验证目标地址的邮件不计入额度）。';
+        case 'E_RATE_LIMIT_EXCEEDED':
+            return '发送过于频繁，已触发限流，请稍后重试。';
+        case 'E_ACCOUNT_SUSPENDED':
+            return '账号的 Email Sending 已被暂停（通常与发送信誉有关），请查看 Cloudflare 控制台。';
+        case 'E_RECIPIENT_SUPPRESSED':
+            return '收件人在抑制列表中（曾退信或被投诉），请更换收件地址。';
+        default:
+            // TypeError（参数结构不合法）没有 code，属于我们校验漏掉的情况，原样给出便于排查。
+            return msg ? ('发送失败：' + msg) : '发送失败，请稍后重试。';
+    }
+}
+
+// base64 编码 UTF-8 字符串（用于构造已发送 .eml 的编码头与正文）。
+// btoa 只接受 Latin-1，必须先把 UTF-8 字节转成二进制串。
+function base64EncodeUtf8(text) {
+    const bytes = new TextEncoder().encode(String(text || ''));
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 8192) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    }
+    return btoa(bin);
+}
+
+// RFC 2047 B 编码主题。纯 ASCII 且不含特殊字符时保持原文，避免无谓编码。
+function encodeHeaderText(text) {
+    const s = String(text || 'No_Subject');
+    if (/^[\x20-\x7e]+$/.test(s)) return s;
+    return '=?UTF-8?B?' + base64EncodeUtf8(s) + '?=';
+}
+
+// 拆成「显示名 <地址>」形式，显示名走 RFC 2047 编码，地址原样（已校验）。
+function formatMailbox(address, name) {
+    const addr = String(address || '').trim();
+    const display = cleanStr(name);
+    if (!display) return addr;
+    return encodeHeaderText(display) + ' <' + addr + '>';
+}
+
+// 邮箱地址合法性校验。够用即可：本地部分 + @ + 域名，禁止空白与尖括号（防头部注入）。
+function isValidEmail(value) {
+    const s = String(value || '').trim();
+    if (s.length > 254 || /\s|[<>,;]/.test(s)) return false;
+    return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s);
+}
+
+// 把用户填写的收件人字符串拆成合法地址数组。支持逗号 / 分号 / 空白分隔。
+// 返回 { addresses, error } —— 任何一个非法地址都会让整封邮件拒绝，避免静默丢收件人。
+function parseRecipients(raw) {
+    const parts = String(raw || '').split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) return { addresses: [], error: '请填写收件人' };
+    if (parts.length > 50) return { addresses: [], error: '收件人总数不能超过 50 个' };
+    for (const addr of parts) {
+        if (!isValidEmail(addr)) return { addresses: [], error: '收件人地址不合法：' + addr };
+    }
+    // 去重，保持顺序
+    return { addresses: Array.from(new Set(parts)), error: '' };
+}
+
+// 构造一封留档用的标准 RFC5322 邮件（纯文本正文，base64 编码），存到 sent/ 前缀。
+// 这样已发送邮件能直接复用 processEmail / 列表 / 详情 / 原文下载 / 翻译的全套逻辑。
+function buildSentEml({ from, to, subject, text, name, replyTo }) {
+    const lines = [
+        'From: ' + formatMailbox(from, name),
+        'To: ' + to.map(a => '<' + a + '>').join(', '),
+        'Subject: ' + encodeHeaderText(subject),
+        'Date: ' + new Date().toUTCString(),
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: base64'
+    ];
+    if (replyTo && isValidEmail(replyTo)) lines.push('Reply-To: <' + replyTo + '>');
+    const b64 = base64EncodeUtf8(text || '');
+    // ''.match() 返回 null，空正文时给一个空片段，避免 .join 抛错。
+    const wrapped = b64 ? b64.match(/.{1,76}/g).join('\r\n') : '';
+    lines.push('X-Mailer: CF Mail on Cloudflare Workers', '', wrapped, '');
+    return lines.join('\r\n');
+}
+
 // 把路径里的键解析成真实的 R2 对象，自动区分收件箱 / 回收站。
 async function resolveEmailKey(env, rawKey) {
     if (!rawKey || rawKey === CONFIG_FILE || rawKey.startsWith(SYS_PREFIX)) return null;
     const obj = await env.MAIL_BUCKET.get(rawKey);
-    if (obj) return { key: rawKey, obj: obj, isTrash: rawKey.startsWith(TRASH_PREFIX) };
-    if (rawKey.startsWith(TRASH_PREFIX)) return null;
+    if (obj) return {
+        key: rawKey, obj: obj,
+        isTrash: rawKey.startsWith(TRASH_PREFIX),
+        isSent: rawKey.startsWith(SENT_PREFIX)
+    };
+    if (rawKey.startsWith(TRASH_PREFIX) || rawKey.startsWith(SENT_PREFIX)) return null;
     const trashedKey = TRASH_PREFIX + rawKey;
     const trashed = await env.MAIL_BUCKET.get(trashedKey);
-    if (trashed) return { key: trashedKey, obj: trashed, isTrash: true };
+    if (trashed) return { key: trashedKey, obj: trashed, isTrash: true, isSent: false };
     return null;
 }
 
@@ -1684,7 +1819,7 @@ window.addEventListener('message', function(e){
 `;
 
 // ---------- 全局布局 ----------
-// activePage: inbox | starred | trash | settings
+// activePage: inbox | starred | sent | trash | settings
 // opts: { unreadCount, starCount, trashCount }
 
 const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0, opts = {}) => {
@@ -1695,6 +1830,7 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0, opts =
     const unread = Number(opts.unreadCount) || 0;
     const starred = Number(opts.starCount) || 0;
     const trashed = Number(opts.trashCount) || 0;
+    const sentCount = Number(opts.sentCount) || 0;
 
     const navItem = (page, href, icon, label, badgeHtml, trashy) => `
         <a href="${href}" class="nav-item${activePage === page ? ' active' : ''}${trashy && activePage === page ? ' trashy' : ''}">
@@ -1745,8 +1881,10 @@ const renderLayout = (content, activePage = 'inbox', latestTimestamp = 0, opts =
             <button onclick="toggleMenu()" class="icon-btn md:hidden ml-auto" aria-label="关闭菜单">${Icons.x}</button>
         </div>
         <nav class="side-nav" aria-label="主导航">
+            <a href="/compose" class="btn btn-primary mb-3 w-full" style="justify-content:flex-start">${Icons.send}<span>写邮件</span></a>
             ${navItem('inbox', '/', Icons.inbox, '收件箱', badge(unread, true))}
             ${navItem('starred', '/starred', Icons.star, '已加星标', badge(starred, false, 'nav-star-badge'))}
+            ${navItem('sent', '/sent', Icons.send, '已发送', badge(sentCount, false, 'nav-sent-badge'))}
             ${navItem('trash', '/trash', Icons.trash, '回收站', badge(trashed, false), true)}
             <div class="my-2" style="border-top:1px solid var(--border)"></div>
             ${navItem('settings', '/settings', Icons.gear, '设置', '')}
@@ -2072,6 +2210,25 @@ function renderSettings(settings, turnstile, forward, opts) {
                     </section>
 
                     <section class="panel">
+                        <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.send}</span>发件设置${sourceBadge(o.sendFromSource || 'none')}</h2>
+                        <p class="panel-desc mt-1 mb-4">填写用于「写邮件」的发件人地址。该地址的域名必须已 onboard 到 Cloudflare Email Service（配置好 SPF / DKIM / DMARC），否则发送会失败。留空则回退到 <code>SEND_FROM</code> 环境变量。</p>
+                        <div class="alert ${o.hasEmailBinding ? 'alert-info' : 'alert-error'} mb-4" style="font-size:.82rem">
+                            <span class="flex-shrink-0 mt-0.5">${o.hasEmailBinding ? Icons.check : Icons.alert}</span>
+                            <span>${o.hasEmailBinding
+                                ? '发信绑定（env.EMAIL）已就绪。'
+                                : '未检测到 send_email 绑定：请在 wrangler.jsonc 加入 "send_email": [{ "name": "EMAIL" }] 后重新部署。'}</span>
+                        </div>
+                        <form method="POST" action="/settings">
+                            <label class="field-label">发件人地址（From）</label>
+                            <input type="email" name="send_from" autocomplete="off" value="${escapeAttr(settings.sendFrom || '')}" placeholder="me@yourdomain.com" class="input">
+                            <div class="panel-actions">
+                                <button type="submit" class="btn btn-primary">保存发件设置</button>
+                            </div>
+                        </form>
+                        <p class="text-xs mt-3" style="color:var(--text-3)">免费版只能发给账号中已验证的目标地址；群发或发给任意地址需升级 Workers 付费版。发出的邮件会在「已发送」留档。</p>
+                    </section>
+
+                    <section class="panel">
                         <div class="flex items-center justify-between gap-3 mb-1 flex-wrap">
                             <h2 class="panel-title"><span style="color:var(--brand-700)">${Icons.shield}</span>人机验证 · Cloudflare Turnstile</h2>
                             ${sourceBadge(turnstile.source)}
@@ -2301,6 +2458,21 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
     const encodedKey = encodeURIComponent(key);
     const isStarred = !!ex.isStarred;
     const isRead = ex.isRead !== false;
+    const isSent = !!ex.isSent;
+
+    // 「回复」预填：收件箱邮件回给发件人，已发送邮件回给原收件人（再次发送）。
+    // 主题去掉已有的 Re:/Fwd: 前缀再统一加 Re:，避免出现 Re: Re: Re:。
+    const replyToRaw = String(email.headers['reply-to'] || '');
+    const replyAddr = isSent
+        ? ((String(email.headers['to'] || '').match(/<([^>]+)>/) || [])[1] || String(email.headers['to'] || '').split(/[,;]/)[0].trim())
+        : ((replyToRaw.match(/<([^>]+)>/) || [])[1] || replyToRaw.trim() || senderEmail);
+    let replySubject = String(subject || '').replace(/^\s*(re|fwd)\s*:\s*/i, '').trim();
+    if (!replySubject) replySubject = '(无主题)';
+    const quoteSource = (String(email.text || '').trim() || htmlToText(email.html)).slice(0, 1500);
+    const quoteBody = '\n\n—— 原邮件 ——\n' + quoteSource.split(/\r?\n/).map(line => '> ' + line).join('\n');
+    const replyHref = '/compose?to=' + encodeURIComponent(isValidEmail(replyAddr) ? replyAddr : '')
+        + '&subject=' + encodeURIComponent('Re: ' + replySubject)
+        + '&body=' + encodeURIComponent(quoteBody);
 
     const strippedNotice = (email.html && stripActiveContent(email.html).removed)
         ? `<div class="alert alert-info mt-4"><span class="flex-shrink-0 mt-0.5">${Icons.shield}</span><span>这封邮件含有脚本或内联事件，已为安全起见移除；正文其余内容不受影响。</span></div>`
@@ -2331,28 +2503,23 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
         ? `<span class="icon-btn" style="opacity:.3;cursor:not-allowed" aria-disabled="true" title="${label}">${icon}</span>`
         : `<a href="/email/${encodeURIComponent(targetKey)}" class="icon-btn" title="${label}">${icon}</a>`;
 
-    const starBtn = isTrash ? '' : `
+    const starBtn = (isTrash || isSent) ? '' : `
         <button id="detail-star-btn" onclick="toggleStarDetail()" class="star-btn !w-10 !h-10${isStarred ? ' on' : ''}"
             title="${isStarred ? '取消星标' : '加星标'}" aria-pressed="${isStarred ? 'true' : 'false'}">
             ${isStarred ? Icons.starFill : Icons.star}
         </button>`;
 
-    const readBtn = isTrash ? '' : `
+    const readBtn = (isTrash || isSent) ? '' : `
         <button id="detail-read-btn" onclick="toggleReadDetail()" class="icon-btn" title="${isRead ? '标记为未读' : '标记为已读'}">
             ${isRead ? Icons.unread : Icons.read}
         </button>`;
 
-    const toolbar = `
-        <div class="flex items-center gap-0.5 sm:gap-1">
-            ${navBtn(ex.prevKey, Icons.chevL, '上一封（更新的）', !ex.prevKey)}
-            ${navBtn(ex.nextKey, Icons.chevR, '下一封（更早的）', !ex.nextKey)}
-            <span class="w-px h-6 mx-1 hidden sm:block" style="background:var(--border)"></span>
-            ${starBtn}
-            ${readBtn}
-            <button id="translate-btn" onclick="translateMail()" class="btn btn-soft !py-2 !px-3 !text-[13px]" title="按原文版式就地翻译成中文">${Icons.translate}<span class="hidden sm:inline">翻译</span></button>
-            <a href="/raw/${encodedKey}" download class="icon-btn" title="下载原始邮件（.eml）">${Icons.download}</a>
-            <button onclick="printMail()" class="icon-btn" title="打印邮件正文">${Icons.print}</button>
-            ${isTrash ? `
+    // 回复按钮：收件箱与已发送都可回复（后者即「再次发送给原收件人」）；回收站不提供。
+    const replyBtn = isTrash ? '' : `
+        <a href="${replyHref}" class="btn btn-soft !py-2 !px-3 !text-[13px]" title="回复这封邮件">${Icons.send}<span class="hidden sm:inline">回复</span></a>`;
+
+    // 删除区：回收站=恢复+彻底删除；已发送=彻底删除；收件箱=移入回收站。
+    const deleteControls = isTrash ? `
             <form method="POST" action="/restore" onsubmit="return confirmSingle(event, '确定要恢复这封邮件吗？')" class="contents">
                 <input type="hidden" name="key" value="${escapeAttr(key)}">
                 <button class="icon-btn" style="color:var(--success)" title="恢复到收件箱">${Icons.refresh}</button>
@@ -2360,17 +2527,36 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
             <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除后将无法恢复，确定吗？', true)" class="contents">
                 <input type="hidden" name="key" value="${escapeAttr(key)}">
                 <button class="icon-btn danger" title="彻底删除">${Icons.trash}</button>
-            </form>` : `
+            </form>`
+        : isSent ? `
+            <form method="POST" action="/purge" onsubmit="return confirmSingle(event, '彻底删除这封已发送邮件？此操作不可恢复。', true)" class="contents">
+                <input type="hidden" name="key" value="${escapeAttr(key)}">
+                <button class="icon-btn danger" title="彻底删除">${Icons.trash}</button>
+            </form>`
+        : `
             <form method="POST" action="/delete" onsubmit="return confirmSingle(event, '确定要将这封邮件移入回收站吗？')" class="contents">
                 <input type="hidden" name="key" value="${escapeAttr(key)}">
                 <button class="icon-btn danger" title="移入回收站">${Icons.trash}</button>
-            </form>`}
+            </form>`;
+
+    const toolbar = `
+        <div class="flex items-center gap-0.5 sm:gap-1">
+            ${navBtn(ex.prevKey, Icons.chevL, '上一封（更新的）', !ex.prevKey)}
+            ${navBtn(ex.nextKey, Icons.chevR, '下一封（更早的）', !ex.nextKey)}
+            <span class="w-px h-6 mx-1 hidden sm:block" style="background:var(--border)"></span>
+            ${replyBtn}
+            ${starBtn}
+            ${readBtn}
+            <button id="translate-btn" onclick="translateMail()" class="btn btn-soft !py-2 !px-3 !text-[13px]" title="按原文版式就地翻译成中文">${Icons.translate}<span class="hidden sm:inline">翻译</span></button>
+            <a href="/raw/${encodedKey}" download class="icon-btn" title="下载原始邮件（.eml）">${Icons.download}</a>
+            <button onclick="printMail()" class="icon-btn" title="打印邮件正文">${Icons.print}</button>
+            ${deleteControls}
         </div>`;
 
     return `
     <div class="view fade-in">
         <div class="view-head">
-            <a href="${isTrash ? '/trash' : '/'}" class="icon-btn" title="返回列表">${Icons.back}</a>
+            <a href="${isTrash ? '/trash' : (isSent ? '/sent' : '/')}" class="icon-btn" title="返回列表">${Icons.back}</a>
             <div class="flex-1 min-w-0"></div>
             ${toolbar}
         </div>
@@ -2393,7 +2579,7 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
                     </div>
                     <div class="flex flex-wrap gap-2 mt-3.5">
                         ${isStarred ? '<span class="chip chip-amber">★ 已加星标</span>' : ''}
-                        ${isTrash ? '<span class="chip chip-gray">回收站</span>' : (isRead ? '<span class="chip chip-blue">已读</span>' : '<span class="chip chip-green">未读</span>')}
+                        ${isSent ? '<span class="chip chip-green">已发送</span>' : (isTrash ? '<span class="chip chip-gray">回收站</span>' : (isRead ? '<span class="chip chip-blue">已读</span>' : '<span class="chip chip-green">未读</span>'))}
                         ${email.attachments.length ? `<span class="chip chip-gray">${Icons.attach} ${email.attachments.length} 个附件</span>` : ''}
                     </div>
                 </div>
@@ -2535,9 +2721,10 @@ function renderEmailDetail(email, key, isTrash, uploaded, extra) {
 function renderMailListPage(p) {
     const isTrash = p.mode === 'trash';
     const isStarred = p.mode === 'starred';
+    const isSent = p.mode === 'sent';
 
-    const batchButtons = isTrash ? `
-        <button type="button" onclick="confirmBatch('restore')" class="btn btn-success-soft !py-2 !px-3.5 !text-[13px]">${Icons.refresh}<span class="hidden sm:inline">恢复</span></button>
+    const batchButtons = (isTrash || isSent) ? `
+        ${isTrash ? `<button type="button" onclick="confirmBatch('restore')" class="btn btn-success-soft !py-2 !px-3.5 !text-[13px]">${Icons.refresh}<span class="hidden sm:inline">恢复</span></button>` : ''}
         <button type="button" onclick="confirmBatch('purge')" class="btn btn-danger-soft !py-2 !px-3.5 !text-[13px]">${Icons.trash}<span class="hidden sm:inline">彻底删除</span></button>`
     : isStarred ? `
         <button type="button" onclick="confirmBatch('mark_read')" class="icon-btn" title="标记为已读">${Icons.read}</button>
@@ -2551,7 +2738,7 @@ function renderMailListPage(p) {
         <button type="button" onclick="confirmBatch('delete')" class="icon-btn danger" title="移入回收站">${Icons.trash}</button>`;
 
     const rowsHtml = p.rows.map(r => {
-        const starBtn = isTrash ? '' : `
+        const starBtn = (isTrash || isSent) ? '' : `
             <button class="star-btn${r.isStarred ? ' on' : ''}" onclick="return toggleStar(this)"
                 title="${r.isStarred ? '取消星标' : '加星标'}" aria-pressed="${r.isStarred ? 'true' : 'false'}" aria-label="星标">
                 ${r.isStarred ? Icons.starFill : Icons.star}
@@ -2589,14 +2776,18 @@ function renderMailListPage(p) {
         </div>` : (p.rows.length > 0 ? `
         <div class="px-4 py-6 text-center text-xs" style="color:var(--text-3)">— 已经到底了 —</div>` : '');
 
-    const markAllRead = (!isTrash && !isStarred && p.showMarkAllRead) ? `
+    const markAllRead = (!isTrash && !isStarred && !isSent && p.showMarkAllRead) ? `
         <form method="POST" action="/mark-all-read" onsubmit="return confirmSingle(event, '将收件箱全部邮件标记为已读？')" class="flex-shrink-0">
             <input type="hidden" name="next" value="/">
             <button class="icon-btn" title="全部标记为已读">${Icons.checkAll}</button>
         </form>` : '';
 
-    const unreadFilter = (!isTrash) ? `
+    const unreadFilter = (!isTrash && !isSent) ? `
         <a href="${p.filterToggleHref}" class="icon-btn${p.unreadOnly ? ' on' : ''}" title="${p.unreadOnly ? '显示全部邮件' : '只看未读邮件'}">${Icons.unread}</a>` : '';
+
+    // 写邮件入口：桌面/移动端都能在列表头直接撰写（侧栏在移动端是抽屉）
+    const composeBtn = `
+        <a href="/compose" class="icon-btn" title="写邮件" style="color:var(--brand-700)">${Icons.send}</a>`;
 
     const emptyTrash = (isTrash && p.showEmptyTrash) ? `
         <form method="POST" action="/purge-all" onsubmit="return confirmSingle(event, '确定要清空回收站吗？所有邮件将被彻底删除，此操作不可恢复！', true)" class="flex-shrink-0">
@@ -2616,6 +2807,7 @@ function renderMailListPage(p) {
                     <h1 class="view-title truncate">${p.title}</h1>
                 </div>
                 <div class="flex items-center gap-0.5 flex-shrink-0">
+                    ${composeBtn}
                     ${unreadFilter}
                     ${markAllRead}
                     ${emptyTrash}
@@ -2662,18 +2854,126 @@ function renderMailListPage(p) {
     </div>`;
 }
 
+// ---------- 撰写邮件页 ----------
+// prefill: { to, subject, body } —— 从详情页「回复」跳转过来时预填
+// sendFrom: 当前生效的发件人地址（应用内设置 → 环境变量）；为空则提示去设置页配置
+// hasEmailBinding: 是否绑定了 send_email
+function renderCompose(prefill, sendFrom, hasEmailBinding) {
+    const pf = prefill || {};
+    const to = escapeAttr(pf.to || '');
+    const subject = escapeAttr(pf.subject || '');
+    const body = escapeHtml(pf.body || '');
+
+    let alertHtml = '';
+    if (!hasEmailBinding) {
+        alertHtml = `<div class="alert alert-error mb-5"><span class="flex-shrink-0 mt-0.5">${Icons.alert}</span><span><b>尚未绑定发信能力。</b>请在 <code>wrangler.jsonc</code> 中加入 <code>"send_email": [{ "name": "EMAIL" }]</code> 后重新部署，详见 README。</span></div>`;
+    } else if (!sendFrom) {
+        alertHtml = `<div class="alert alert-error mb-5"><span class="flex-shrink-0 mt-0.5">${Icons.alert}</span><span><b>还没有配置发件人地址。</b>请先到 <a href="/settings" class="underline font-semibold">设置 → 发件设置</a> 填写一个已 onboard 到 Email Service 的地址。</span></div>`;
+    } else {
+        alertHtml = `<div class="alert alert-info mb-5"><span class="flex-shrink-0 mt-0.5">${Icons.info}</span><span>发件人：<b style="color:var(--text-1)">${escapeHtml(sendFrom)}</b>。免费版只能发送给账号中<b>已验证的目标地址</b>；发往任意地址需升级 Workers 付费版。</span></div>`;
+    }
+
+    const disabled = (!hasEmailBinding || !sendFrom) ? ' disabled' : '';
+
+    return `
+    <div class="view fade-in">
+        <div class="view-head">
+            <a href="/" class="icon-btn" title="返回收件箱">${Icons.back}</a>
+            <h1 class="view-title ml-1">写邮件</h1>
+        </div>
+        <div class="view-body">
+            <div class="px-4 sm:px-8 py-6 sm:py-8 max-w-3xl mx-auto safe-bottom">
+                ${alertHtml}
+                <div class="panel">
+                    <form id="compose-form" onsubmit="return submitCompose(event)">
+                        <div class="mb-5">
+                            <label class="field-label">收件人</label>
+                            <input type="text" name="to" value="${to}" class="input" placeholder="name@example.com（多个用逗号分隔）" autocomplete="off" required>
+                            <p class="text-xs mt-1.5" style="color:var(--text-3)">免费版收件人必须是账号中已验证的目标地址。</p>
+                        </div>
+                        <div class="mb-5">
+                            <label class="field-label">主题</label>
+                            <input type="text" name="subject" value="${subject}" class="input" placeholder="邮件主题" autocomplete="off">
+                        </div>
+                        <div class="mb-5">
+                            <label class="field-label">正文</label>
+                            <textarea name="body" rows="14" class="input" style="resize:vertical;line-height:1.7" placeholder="请输入正文…">${body}</textarea>
+                            <p class="text-xs mt-1.5" style="color:var(--text-3)">纯文本正文。整封邮件（含附件）上限 25 MiB。</p>
+                        </div>
+                        <div id="compose-status" class="hidden"></div>
+                        <div class="panel-actions">
+                            <button type="submit" class="btn btn-primary"${disabled}>${Icons.send}<span>发送</span></button>
+                            <a href="/" class="btn btn-ghost" style="border:1px solid var(--border)">取消</a>
+                            <span class="spacer"></span>
+                            <span class="text-xs" style="color:var(--text-3)">主题与正文至少填一项</span>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+    (function () {
+        var busy = false;
+        function setStatus(text, kind) {
+            var box = document.getElementById('compose-status');
+            if (!box) return;
+            if (!text) { box.className = 'hidden'; box.textContent = ''; return; }
+            box.className = 'alert mb-5 ' + (kind === 'error' ? 'alert-error' : 'alert-ok');
+            box.textContent = text;
+        }
+        window.submitCompose = function (e) {
+            e.preventDefault();
+            if (busy) return false;
+            var form = e.target;
+            var btn = form.querySelector('button[type=submit]');
+            var to = form.elements['to'].value.trim();
+            var subject = form.elements['subject'].value.trim();
+            var body = form.elements['body'].value;
+            if (!to) { setStatus('请填写收件人', 'error'); return false; }
+            if (!subject && !body.trim()) { setStatus('主题与正文至少填写一项', 'error'); return false; }
+            busy = true; btn.disabled = true; btn.classList.add('opacity-60');
+            setStatus('正在发送…', 'info');
+            fetch('/api/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to: to, subject: subject, body: body })
+            }).then(function (res) {
+                return res.json().catch(function () { return null; }).then(function (d) { return { status: res.status, data: d }; });
+            }).then(function (r) {
+                if (r.data && r.data.ok) {
+                    window.location.href = '/sent?toast=' + encodeURIComponent('邮件已发送');
+                    return;
+                }
+                setStatus((r.data && r.data.error) || ('发送失败（HTTP ' + r.status + '）'), 'error');
+            }).catch(function () {
+                setStatus('网络错误，请稍后重试', 'error');
+            }).then(function () {
+                busy = false; btn.disabled = false; btn.classList.remove('opacity-60');
+            });
+            return false;
+        };
+    })();
+    <\/script>`;
+}
+
 // ---------- 邮箱计数缓存 ----------
-// _sys/counts.json: { total, unread, starred, trash }
+// _sys/counts.json: { total, unread, starred, trash, sent }
 // 目的：侧栏徽标、设置页统计不再每次全量 list() R2（翻到底最多 20 页，很贵），
 // 读一次小 JSON 即可。所有写操作都增量维护；列表页是权威数据源，
 // 每次渲染顺手用真实值校准缓存，兜住一切漂移。
 const COUNTS_FILE = SYS_PREFIX + 'counts.json';
+const COUNT_KEYS = ['total', 'unread', 'starred', 'trash', 'sent'];
 async function getCounts(env) {
     try {
         const obj = await env.MAIL_BUCKET.get(COUNTS_FILE);
         if (obj) {
             const c = await obj.json();
-            if (c && typeof c.total === 'number') return c;
+            if (c && typeof c.total === 'number') {
+                // 兼容老缓存：没有 sent 字段的补 0，避免 bumpCounts 里 NaN 污染。
+                for (const k of COUNT_KEYS) if (typeof c[k] !== 'number') c[k] = 0;
+                return c;
+            }
         }
     } catch (e) {}
     return null;
@@ -2686,10 +2986,11 @@ async function putCounts(env, c) {
     } catch (e) {}
 }
 async function refreshCounts(env) {
-    const c = { total: 0, unread: 0, starred: 0, trash: 0 };
+    const c = { total: 0, unread: 0, starred: 0, trash: 0, sent: 0 };
     try {
         for (const o of await listAllObjects(env)) {
             if (o.key.startsWith(TRASH_PREFIX)) { c.trash++; continue; }
+            if (o.key.startsWith(SENT_PREFIX)) { c.sent++; continue; }
             if (!isMailKey(o.key)) continue;
             c.total++;
             const md = o.customMetadata || {};
@@ -2707,8 +3008,8 @@ async function countsOrRefresh(env) {
 async function bumpCounts(env, d) {
     const c = (await getCounts(env)) || (await refreshCounts(env));
     let touched = false;
-    for (const k of ['total', 'unread', 'starred', 'trash']) {
-        if (d[k]) { c[k] = Math.max(0, c[k] + d[k]); touched = true; }
+    for (const k of COUNT_KEYS) {
+        if (d[k]) { c[k] = Math.max(0, (c[k] || 0) + d[k]); touched = true; }
     }
     if (touched) await putCounts(env, c);
     return c;
@@ -2939,6 +3240,98 @@ async function handleRequest(request, env, ctx) {
         }
     }
 
+    // ---------- 撰写邮件页 ----------
+    if (url.pathname === '/compose') {
+        const detailSettings = await getSettings(env);
+        const sf = resolveSendFrom(detailSettings, env);
+        // 从详情页「回复」跳转：?to=&subject=&body= 预填
+        const prefill = {
+            to: url.searchParams.get('to') || '',
+            subject: url.searchParams.get('subject') || '',
+            body: url.searchParams.get('body') || ''
+        };
+        const counts = await countsOrRefresh(env);
+        return htmlResponse(renderLayout(
+            renderCompose(prefill, sf.value, !!env.EMAIL),
+            'inbox',
+            0,
+            { unreadCount: counts.unread, starCount: counts.starred, sentCount: counts.sent }
+        ));
+    }
+
+    // ---------- 发送邮件 ----------
+    // 走 send_email 绑定（env.EMAIL.send）。免费版只能发给账号中已验证的目标地址，
+    // 其余情况底层报 E_RECIPIENT_PLAN_RESTRICTED —— 由 describeSendFailure 翻成人话。
+    if (url.pathname === '/api/send' && method === 'POST') {
+        if (!env.EMAIL) {
+            return jsonResponse({ ok: false, error: '未绑定 send_email。请在 wrangler.jsonc 加入 "send_email": [{ "name": "EMAIL" }] 后重新部署。' }, 503);
+        }
+        const sendSettings = await getSettings(env);
+        const sf = resolveSendFrom(sendSettings, env);
+        if (!sf.value) {
+            return jsonResponse({ ok: false, error: '尚未配置发件人地址，请到 设置 → 发件设置 填写。' }, 400);
+        }
+        if (!isValidEmail(sf.value)) {
+            return jsonResponse({ ok: false, error: '发件人地址格式不合法，请到 设置 → 发件设置 修正。' }, 400);
+        }
+
+        let body = null;
+        try { body = await request.json(); } catch (e) {}
+        if (!body || typeof body !== 'object') {
+            return jsonResponse({ ok: false, error: '请求格式不正确' }, 400);
+        }
+
+        const parsed = parseRecipients(body.to);
+        if (parsed.error) return jsonResponse({ ok: false, error: parsed.error }, 400);
+        const subject = String(body.subject || '').trim().slice(0, 998);
+        const text = String(body.body || '');
+        if (!subject && !text.trim()) {
+            return jsonResponse({ ok: false, error: '主题与正文至少填写一项' }, 400);
+        }
+        // 正文体量上限：整封邮件含编码开销要留在 25 MiB 内，这里给正文留 1 MiB 的保守上限。
+        if (text.length > 1024 * 1024) {
+            return jsonResponse({ ok: false, error: '正文过长（上限约 100 万字符）' }, 400);
+        }
+
+        const from = sf.value;
+        try {
+            const result = await env.EMAIL.send({
+                from: from,
+                to: parsed.addresses,
+                subject: subject || '(无主题)',
+                text: text || ' '
+            });
+
+            // 留档：把发出的内容构造成标准 .eml 存到 sent/ 前缀，
+            // 复用列表 / 详情 / 原文下载 / 翻译的全套逻辑。留档失败不影响「已发出」这个事实。
+            const now = Date.now();
+            const displayFrom = cleanStr(sendSettings.sendFromName) || 'CF Mail';
+            const eml = buildSentEml({ from: from, to: parsed.addresses, subject: subject || '(无主题)', text: text, name: displayFrom });
+            // 键名里 from 位放「收件人摘要」、subject 位放主题：
+            // 列表页从键名解析时，「已发送」那列就会显示收件人（与 Gmail 行为一致），
+            // 而详情页读 .eml 原文，From/To 头仍是准确的发件人 / 收件人。
+            const recipientSummary = clampText(parsed.addresses.join(', '), 120).replace(/[\r\n]/g, ' ').replace(/[\/\\]/g, '-');
+            const sentKey = SENT_PREFIX + buildMailKey(recipientSummary, subject, now);
+            try {
+                ctx.waitUntil(env.MAIL_BUCKET.put(sentKey, eml, {
+                    customMetadata: { isRead: 'true' },
+                    httpMetadata: { contentType: 'message/rfc822' }
+                }));
+                ctx.waitUntil(bumpCounts(env, { sent: 1 }));
+            } catch (e) {
+                console.error('Archive sent mail failed:', e && e.stack ? e.stack : e);
+            }
+
+            return jsonResponse({
+                ok: true,
+                messageId: result && result.messageId ? result.messageId : ''
+            });
+        } catch (e) {
+            console.error('Email sending failed:', e && e.stack ? e.stack : e);
+            return jsonResponse({ ok: false, error: describeSendFailure(e) }, 502);
+        }
+    }
+
     // ---------- 应用内设置页 ----------
     // ---------- 星标 / 已读状态（JSON，无刷新切换） ----------
     // 计数走增量缓存：原来每次点星标都要全量 list() 翻到底，现在只是一次小 JSON 读写。
@@ -2949,6 +3342,8 @@ async function handleRequest(request, env, ctx) {
         // resolveEmailKey 会拒绝 CONFIG_FILE 与 _sys/ 内部键，天然防越权
         const resolved = rawKey ? await resolveEmailKey(env, rawKey) : null;
         if (!resolved) return jsonResponse({ ok: false, error: '邮件不存在或已删除' }, 404);
+        // 已发送 / 回收站的邮件不参与星标与未读切换（界面上也不显示这些按钮）
+        if (resolved.isSent || resolved.isTrash) return jsonResponse({ ok: false, error: '该邮件不支持此操作' }, 400);
         const before = Object.assign({}, resolved.obj.customMetadata);
         const meta = Object.assign({}, before);
         const delta = {};
@@ -3021,7 +3416,7 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === '/settings') {
         const settings = await getSettings(env);
         const stats = await countsOrRefresh(env);
-        const layoutOpts = { unreadCount: stats.unread, starCount: stats.starred };
+        const layoutOpts = { unreadCount: stats.unread, starCount: stats.starred, sentCount: stats.sent };
 
         if (method === 'POST') {
             const fd = await request.formData();
@@ -3032,6 +3427,7 @@ async function handleRequest(request, env, ctx) {
             // 非密钥字段：区块内会回显当前值，所以「空串」就是「清空」。
             if (fd.has('forward_email')) next.forwardEmail = cleanStr(fd.get('forward_email'));
             if (fd.has('turnstile_site_key')) next.turnstileSiteKey = cleanStr(fd.get('turnstile_site_key'));
+            if (fd.has('send_from')) next.sendFrom = cleanStr(fd.get('send_from'));
 
             // Secret Key：页面永远不回显明文，所以「空串」只能理解为「不修改」。
             // 想清空请用 Turnstile 区块里的「清空密钥」按钮。
@@ -3051,10 +3447,10 @@ async function handleRequest(request, env, ctx) {
             if (hasSite !== hasSecret) {
                 return htmlResponse(renderLayout(
                     renderSettings(
-                        { forwardEmail: next.forwardEmail, turnstileSiteKey: next.turnstileSiteKey, turnstileSecretKey: settings.turnstileSecretKey },
+                        { forwardEmail: next.forwardEmail, turnstileSiteKey: next.turnstileSiteKey, turnstileSecretKey: settings.turnstileSecretKey, sendFrom: next.sendFrom },
                         resolveTurnstile(settings, env),
                         resolveForwardEmail(settings, env),
-                        { error: 'Turnstile 的 Site Key 与 Secret Key 必须成对填写：要么都填，要么都不填。', stats: stats }
+                        { error: 'Turnstile 的 Site Key 与 Secret Key 必须成对填写：要么都填，要么都不填。', stats: stats, sendFromSource: resolveSendFrom(next, env).source, hasEmailBinding: !!env.EMAIL }
                     ),
                     'settings',
                     0,
@@ -3081,7 +3477,10 @@ async function handleRequest(request, env, ctx) {
                     : (url.searchParams.get('loggedout') ? '已退出其他设备上的登录，本机不受影响。' : ''))));
 
         return htmlResponse(renderLayout(
-            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), { notice: notice, stats: stats }),
+            renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env), {
+                notice: notice, stats: stats,
+                sendFromSource: resolveSendFrom(settings, env).source, hasEmailBinding: !!env.EMAIL
+            }),
             'settings',
             0,
             layoutOpts
@@ -3119,10 +3518,14 @@ async function handleRequest(request, env, ctx) {
         const stats2 = await countsOrRefresh(env);
         const back = (opts, status) => htmlResponse(renderLayout(
             renderSettings(settings, resolveTurnstile(settings, env), resolveForwardEmail(settings, env),
-                Object.assign({}, opts, { stats: stats2 })),
+                Object.assign({}, opts, {
+                    stats: stats2,
+                    sendFromSource: resolveSendFrom(settings, env).source,
+                    hasEmailBinding: !!env.EMAIL
+                })),
             'settings',
             0,
-            { unreadCount: stats2.unread, starCount: stats2.starred }
+            { unreadCount: stats2.unread, starCount: stats2.starred, sentCount: stats2.sent }
         ), status);
 
         const fd = await request.formData();
@@ -3176,13 +3579,16 @@ async function handleRequest(request, env, ctx) {
     if (url.pathname === '/purge' && method === 'POST') {
         const fd = await request.formData();
         const key = fd.get('key');
-        if (key && key.startsWith(TRASH_PREFIX)) {
+        const isSentPurge = !!(key && key.startsWith(SENT_PREFIX));
+        const isTrashPurge = !!(key && key.startsWith(TRASH_PREFIX));
+        if (isTrashPurge || isSentPurge) {
             await env.MAIL_BUCKET.delete(key);
             // 顺手清掉这封邮件缓存的译文，免得留下永远读不到的孤儿对象。
             await dropTranslationCache(env, key);
-            await bumpCounts(env, { trash: -1 });
+            await bumpCounts(env, isSentPurge ? { sent: -1 } : { trash: -1 });
         }
-        return Response.redirect(url.origin + '/trash?toast=' + encodeURIComponent('已彻底删除'), 302);
+        const back = isSentPurge ? '/sent' : '/trash';
+        return Response.redirect(url.origin + back + '?toast=' + encodeURIComponent('已彻底删除'), 302);
     }
     if (url.pathname === '/restore' && method === 'POST') {
         const fd = await request.formData();
@@ -3279,7 +3685,7 @@ async function handleRequest(request, env, ctx) {
         // _sys/ 系统键永不参与批量操作：防伪造表单删掉计数缓存等内部文件
         const keys = fd.getAll('keys').filter(k => k && k !== CONFIG_FILE && !String(k).startsWith(SYS_PREFIX));
         const action = fd.get('action');
-        const totals = { total: 0, unread: 0, starred: 0, trash: 0 };
+        const totals = { total: 0, unread: 0, starred: 0, trash: 0, sent: 0 };
         let done = 0;
         const movedSources = [];  // 移动成功后的源键：第二阶段一次批量删除
         const purgeKeys = [];     // 彻底删除的键：第二阶段一次批量删除
@@ -3287,11 +3693,12 @@ async function handleRequest(request, env, ctx) {
         // 单封处理函数：返回 { ok, d }，d 为该封邮件带来的计数变化。
         // 移动（删除/恢复）时保留 customMetadata，原实现会丢已读/星标状态。
         const applyOne = async (key) => {
-            const d = { total: 0, unread: 0, starred: 0, trash: 0 };
+            const d = { total: 0, unread: 0, starred: 0, trash: 0, sent: 0 };
             const wasUnread = md => (md.isRead !== 'true' ? 1 : 0);
             const wasStarred = md => (md.isStarred === 'true' ? 1 : 0);
             if (action === 'delete') {
-                if (key.startsWith(TRASH_PREFIX)) return { ok: false, d };
+                // 已发送 / 回收站的邮件不走「移入回收站」
+                if (key.startsWith(TRASH_PREFIX) || key.startsWith(SENT_PREFIX)) return { ok: false, d };
                 const obj = await env.MAIL_BUCKET.get(key);
                 if (!obj) return { ok: false, d };
                 const md = obj.customMetadata || {};
@@ -3301,9 +3708,14 @@ async function handleRequest(request, env, ctx) {
                 return { ok: true, d, src: key };
             }
             if (action === 'purge') {
-                if (!key.startsWith(TRASH_PREFIX)) return { ok: false, d };
-                d.trash = -1;
-                return { ok: true, d, purge: key };
+                // 彻底删除：回收站与已发送都允许（两者都是「终点」视图）
+                if (key.startsWith(TRASH_PREFIX)) { d.trash = -1; return { ok: true, d, purge: key }; }
+                if (key.startsWith(SENT_PREFIX)) {
+                    d.sent = -1;
+                    // 已发送邮件若曾手工翻译过，顺手标记缓存由下面的通用清理处理
+                    return { ok: true, d, purge: key };
+                }
+                return { ok: false, d };
             }
             if (action === 'restore') {
                 if (!key.startsWith(TRASH_PREFIX)) return { ok: false, d };
@@ -3346,13 +3758,13 @@ async function handleRequest(request, env, ctx) {
         // 单封失败只记 ok:false，不让整批 500。
         const safeApply = async (key) => {
             try { return await applyOne(key); }
-            catch (e) { return { ok: false, d: { total: 0, unread: 0, starred: 0, trash: 0 } }; }
+            catch (e) { return { ok: false, d: { total: 0, unread: 0, starred: 0, trash: 0, sent: 0 } }; }
         };
         const results = await eachChunk(keys, safeApply);
         for (const r of results) {
             if (!r || !r.ok) continue;
             done++;
-            for (const k of ['total', 'unread', 'starred', 'trash']) totals[k] += r.d[k];
+            for (const k of COUNT_KEYS) totals[k] += (r.d[k] || 0);
             if (r.src) movedSources.push(r.src);
             if (r.purge) purgeKeys.push(r.purge);
         }
@@ -3369,7 +3781,8 @@ async function handleRequest(request, env, ctx) {
 
         // 回跳：白名单校验防开放重定向；保留 q/limit 搜索条件，回到之前的视图
         const nextRaw = String(fd.get('next') || '');
-        const next = nextRaw.indexOf('/trash') === 0 ? '/trash' : (nextRaw === '/starred' ? '/starred' : '/');
+        const next = nextRaw.indexOf('/trash') === 0 ? '/trash'
+            : (nextRaw.indexOf('/sent') === 0 ? '/sent' : (nextRaw === '/starred' ? '/starred' : '/'));
         const qs = [];
         const lim = parseInt(String(fd.get('limit') || ''), 10);
         if (Number.isFinite(lim)) qs.push('limit=' + Math.min(Math.max(lim, PAGE_SIZE_DEFAULT), PAGE_SIZE_MAX));
@@ -3476,7 +3889,7 @@ async function handleRequest(request, env, ctx) {
         const meta0 = resolved.obj.customMetadata || {};
         // 「设置 → 显示与阅读」可关闭自动标已读；默认开启（保持原行为）
         const detailSettings = await getSettings(env);
-        const willMarkRead = detailSettings.autoMarkRead !== false && !resolved.isTrash && meta0.isRead !== 'true';
+        const willMarkRead = detailSettings.autoMarkRead !== false && !resolved.isTrash && !resolved.isSent && meta0.isRead !== 'true';
         if (willMarkRead) {
             // ⚠️ 必须保留已有 customMetadata（isStarred 等），不能只写 isRead ——
             // 否则打开一封星标邮件就会悄悄抹掉它的星标。
@@ -3488,16 +3901,17 @@ async function handleRequest(request, env, ctx) {
         let prevKey = null, nextKey = null, counts = null;
         try {
             const dAll = await listAllObjects(env);
-            counts = { total: 0, unread: 0, starred: 0, trash: 0 };
+            counts = { total: 0, unread: 0, starred: 0, trash: 0, sent: 0 };
             const dMails = [];
             for (const o of dAll) {
                 if (o.key.startsWith(TRASH_PREFIX)) { counts.trash++; if (resolved.isTrash) dMails.push(o); continue; }
+                if (o.key.startsWith(SENT_PREFIX)) { counts.sent++; if (resolved.isSent) dMails.push(o); continue; }
                 if (!isMailKey(o.key)) continue;
                 counts.total++;
                 const md = o.customMetadata || {};
                 if (md.isRead !== 'true') counts.unread++;
                 if (md.isStarred === 'true') counts.starred++;
-                if (!resolved.isTrash) dMails.push(o);
+                if (!resolved.isTrash && !resolved.isSent) dMails.push(o);
             }
             dMails.sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
             const di = dMails.findIndex(m => m.key === resolved.key);
@@ -3517,26 +3931,31 @@ async function handleRequest(request, env, ctx) {
                 prevKey: prevKey,
                 nextKey: nextKey,
                 isStarred: meta0.isStarred === 'true',
-                isRead: resolved.isTrash || meta0.isRead === 'true'
+                isRead: resolved.isTrash || meta0.isRead === 'true',
+                isSent: resolved.isSent
             }),
-            resolved.isTrash ? 'trash' : 'inbox',
+            resolved.isTrash ? 'trash' : (resolved.isSent ? 'sent' : 'inbox'),
             0,
-            { unreadCount: badge.unread, starCount: badge.starred }
+            { unreadCount: badge.unread, starCount: badge.starred, sentCount: badge.sent }
         ));
     }
 
-    const LIST_MODE = url.pathname === '/trash' ? 'trash' : (url.pathname === '/starred' ? 'starred' : (url.pathname === '/' ? 'inbox' : null));
+    const LIST_MODE = url.pathname === '/trash' ? 'trash'
+        : (url.pathname === '/sent' ? 'sent'
+        : (url.pathname === '/starred' ? 'starred' : (url.pathname === '/' ? 'inbox' : null)));
     if (LIST_MODE) {
         // 显示设置（每页数量）：小 JSON，一次读取；?limit= 显式指定时优先
         const listSettings = await getSettings(env);
         const isTrashPage = LIST_MODE === 'trash';
         const isStarredPage = LIST_MODE === 'starred';
+        const isSentPage = LIST_MODE === 'sent';
 
-        // 一次列举、内存里分拣：收件箱 / 回收站 / 计数一次算完。
+        // 一次列举、内存里分拣：收件箱 / 回收站 / 已发送 / 计数一次算完。
         // （R2 list 按键名字典序返回，这里自己按时间戳重排；新邮件永远置顶。）
         const all = await listAllObjects(env);
         const inboxMails = all.filter(o => isMailKey(o.key)).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
         const trashMails = all.filter(o => o.key.startsWith(TRASH_PREFIX)).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
+        const sentMails = all.filter(o => o.key.startsWith(SENT_PREFIX)).sort((a, b) => keyTimestamp(b.key) - keyTimestamp(a.key));
 
         let unreadCount = 0, starCount = 0;
         for (const m of inboxMails) {
@@ -3545,14 +3964,15 @@ async function handleRequest(request, env, ctx) {
             if (md.isStarred === 'true') starCount++;
         }
 
-        let emails = isTrashPage ? trashMails : inboxMails;
+        let emails = isTrashPage ? trashMails : (isSentPage ? sentMails : inboxMails);
         if (isStarredPage) emails = inboxMails.filter(o => (o.customMetadata || {}).isStarred === 'true');
 
-        // 只看未读（收件箱 / 星标页），和搜索可叠加
-        const unreadOnly = !isTrashPage && url.searchParams.get('unread') === '1';
+        // 只看未读（收件箱 / 星标页），和搜索可叠加；回收站与已发送不提供此筛选
+        const unreadOnly = !isTrashPage && !isSentPage && url.searchParams.get('unread') === '1';
         if (unreadOnly) emails = emails.filter(o => (o.customMetadata || {}).isRead !== 'true');
 
-        const displayKeyOf = o => (isTrashPage ? o.key.replace(TRASH_PREFIX, '') : o.key);
+        const displayKeyOf = o => (isTrashPage ? o.key.replace(TRASH_PREFIX, '')
+            : (isSentPage ? o.key.replace(SENT_PREFIX, '') : o.key));
 
         // 搜索：只匹配主题与发件人。键名里存的就是入库时解码好的明文，
         // 不用读正文，所以成本基本为零。
@@ -3580,7 +4000,10 @@ async function handleRequest(request, env, ctx) {
         const hasMore = matched.length > shown.length;
 
         // 列表页是计数的权威数据源：渲染完顺手校准缓存（waitUntil，不阻塞响应）
-        ctx.waitUntil(putCounts(env, { total: inboxMails.length, unread: unreadCount, starred: starCount, trash: trashMails.length }));
+        ctx.waitUntil(putCounts(env, {
+            total: inboxMails.length, unread: unreadCount, starred: starCount,
+            trash: trashMails.length, sent: sentMails.length
+        }));
 
         const rows = shown.map(e => {
             const fullKey = e.key;
@@ -3610,16 +4033,18 @@ async function handleRequest(request, env, ctx) {
             };
         });
 
-        const titles = { inbox: '收件箱', starred: '已加星标', trash: '回收站' };
+        const titles = { inbox: '收件箱', starred: '已加星标', sent: '已发送', trash: '回收站' };
         const emptyCfg = {
             inbox: { icon: Icons.inbox, title: '暂无邮件', desc: '您的收件箱空空如也。新邮件到达时会自动出现在这里。' },
             starred: { icon: Icons.star, title: '还没有加星标的邮件', desc: '把鼠标移到邮件行上（或点开邮件），点亮星标即可收藏到这里。' },
+            sent: { icon: Icons.send, title: '还没有发送过邮件', desc: '点侧栏「写邮件」发出第一封。发出的邮件会在这里留档。' },
             trash: { icon: Icons.trash, title: '回收站是空的', desc: '被删除的邮件会在这里保留，彻底删除后无法恢复。' }
         }[LIST_MODE];
         if (query) { emptyCfg.title = '没有匹配的邮件'; emptyCfg.desc = '换个关键词试试。搜索范围是主题与发件人。'; }
         else if (unreadOnly) { emptyCfg.icon = Icons.checkAll; emptyCfg.title = '没有未读邮件'; emptyCfg.desc = '干得漂亮，收件箱已清空。'; }
 
-        const searchAction = LIST_MODE === 'trash' ? '/trash' : (LIST_MODE === 'starred' ? '/starred' : '/');
+        const searchAction = LIST_MODE === 'trash' ? '/trash'
+            : (LIST_MODE === 'sent' ? '/sent' : (LIST_MODE === 'starred' ? '/starred' : '/'));
         const countLine = query
             ? ('找到 ' + matched.length + ' 封匹配「' + query + '」的邮件')
             : (unreadOnly
@@ -3656,7 +4081,8 @@ async function handleRequest(request, env, ctx) {
             showEmptyTrash: isTrashPage && trashMails.length > 0
         });
         return htmlResponse(renderLayout(html, LIST_MODE, latestTimestamp, {
-            unreadCount: unreadCount, starCount: starCount, trashCount: trashMails.length
+            unreadCount: unreadCount, starCount: starCount,
+            trashCount: trashMails.length, sentCount: sentMails.length
         }));
     }
     return textResponse('Not Found', 404);
