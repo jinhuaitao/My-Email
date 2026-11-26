@@ -1123,7 +1123,11 @@ function describeSendFailure(error) {
         case 'E_RECIPIENT_PLAN_RESTRICTED':
             return '当前 Workers 为免费版：只能发送给账号中「已验证的目标地址」。请到 Cloudflare 控制台 Email Service → Email Routing → Destination Addresses 添加并验证该收件邮箱；若需发给任意地址，请升级到 Workers 付费版。';
         case 'E_RECIPIENT_NOT_ALLOWED':
-            return '收件人被 send_email 绑定的目标地址白名单拒绝。请检查 wrangler.jsonc 里 EMAIL 绑定的 destination_address / allowed_destination_addresses 配置。';
+            // 官方文档：该错误有两种成因 —— ① 绑定的目标地址白名单拒绝；
+            // ② 发件域名未 onboard 到 Email Sending 时，收件人未验证。
+            // 本项目默认绑定不带白名单，所以绝大多数情况是 ②（免费版 + 收件人未验证）。
+            // 旧文案只让用户去查白名单，会把人引到错误方向，这里给出完整排查路径。
+            return '收件人被拒绝。请依次检查：① 收件邮箱是否已在 Cloudflare → Email Routing → Destination Addresses 中添加并验证（免费版只能发给已验证地址）；② 发件域名是否已 onboard 到 Email Service（需配置 SPF / DKIM / DMARC）；③ 若你手动配置过 EMAIL 绑定的目标地址白名单（destination_address / allowed_destination_addresses），请确认收件人在允许列表内。';
         case 'E_SENDER_NOT_VERIFIED':
             return '发件人地址不在 EMAIL 绑定的 allowed_sender_addresses 白名单里，或发送域名未验证。';
         case 'E_SENDER_DOMAIN_NOT_AVAILABLE':
