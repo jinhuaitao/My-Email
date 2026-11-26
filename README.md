@@ -8,28 +8,19 @@
 
 </div>
 
-> ### ✉️ v2.4 · 发信上线
->
-> Cloudflare 于 2026-11-24 把 **Email Sending** 开放给 Workers 免费版，本项目同步补上发信闭环。
-> **写邮件 · 回复 · 已发送留档** —— 收信链路（MIME 解析 / 鉴权 / 翻译 / 入库）零改动，已有 R2 数据完全兼容。
-
 ---
-
-<a id="sending"></a>
 
 ## ✉️ 发信功能
 
-从「只能收」到「收得下、发得出」。发出的邮件以标准 `.eml` 留档到 `sent/`，与现有详情、翻译、原文下载体系无缝复用。
+基于 Cloudflare 2026-11-24 开放的 **Email Sending on Workers Free**，本项目补上了发信闭环。发出的邮件以标准 `.eml` 留档到 `sent/`，与现有详情、翻译、原文下载体系无缝复用。
 
-| 功能 | 体验 |
+| 功能 | 说明 |
 | :--- | :--- |
-| **✍️ 写邮件** | 侧栏主按钮 / 列表头快捷入口；多收件人（逗号分隔，≤ 50）；主题与正文至少填一项 |
-| **↩️ 回复** | 详情页一键预填收件人、`Re:` 主题与引用正文；已发送页的「回复」即再次发给原收件人 |
-| **📤 已发送** | 侧栏独立视图，可查看 / 下载原文 / 彻底删除，与收件箱一样支持搜索与分页 |
-| **⚙️ 发件人** | 设置页「发件设置」可配；优先级：应用内设置 → `SEND_FROM` 环境变量 → 未配置 |
+| **✍️ 写邮件** | 侧栏主按钮 / 列表头入口；多收件人（逗号分隔，≤ 50）；主题与正文至少填一项 |
+| **↩️ 回复** | 详情页预填收件人、`Re:` 主题与引用正文；已发送页的「回复」即再次发给原收件人 |
+| **📤 已发送** | 侧栏独立视图，可查看 / 下载原文 / 彻底删除，支持搜索与分页 |
+| **⚙️ 发件人** | 设置页「发件设置」可配；优先级：应用内设置 → `SEND_FROM` → 未配置 |
 | **💬 可读错误** | `E_RECIPIENT_PLAN_RESTRICTED` 等错误码翻译成「下一步该做什么」 |
-
-### 发信链路
 
 ```
 设置页 / SEND_FROM
@@ -45,404 +36,171 @@
                                             「已发送」视图
 ```
 
-> **⚠️ 免费版的两条硬限制**
+> **⚠️ 免费版限制**
 >
-> 1. **收件人**只能是账号里「已验证的目标地址」（Email Routing → Destination Addresses 中已验证的邮箱）。发给其它地址会报 `E_RECIPIENT_PLAN_RESTRICTED`；发给任意地址需升级 Workers 付费版。
-> 2. **发件人**地址的域名必须 onboard 到 Email Service（SPF / DKIM / DMARC），否则报 `E_SENDER_DOMAIN_NOT_AVAILABLE`。DNS 生效一般 5–15 分钟。
->
-> 好消息：**发给已验证地址永久免费**，不占月配额，也不计每日发送额度。
+> - **收件人**只能是账号里「已验证的目标地址」；发给其它地址会报 `E_RECIPIENT_PLAN_RESTRICTED`，需升级 Workers 付费版才能发给任意地址。
+> - **发件人**地址的域名必须 onboard 到 Email Service（SPF / DKIM / DMARC），否则报 `E_SENDER_DOMAIN_NOT_AVAILABLE`。DNS 生效一般 5–15 分钟。
+> - 好消息：**发给已验证地址永久免费**，不占月配额，也不计每日发送额度。
 
-### 三步启用发信
-
-| 步骤 | 操作 | 位置 |
-| :---: | :--- | :--- |
-| **1** | 确认 `wrangler.jsonc` 含 `send_email` 绑定（已内置），部署自动创建 | 代码已就绪 |
-| **2** | Onboard 发件域名，自动写入 `cf-bounce` 的 MX / SPF / DKIM / DMARC | Cloudflare → Email Service → Email Sending |
-| **3** | 填入发件人地址，把测试收件邮箱加入 Destination Addresses 并验证 | 应用内「设置 → 发件设置」 |
-
-> 💡 `EMAIL` 绑定缺失或未配发件人时，撰写页会显示明确指引而非白屏；收信功能始终不受影响。
+**启用发信**：① 确认 `wrangler.jsonc` 含 `send_email` 绑定（已内置）；② 到 Cloudflare → Email Service → Email Sending → **Onboard Domain**；③ 在「设置 → 发件设置」填发件人地址，并把测试收件邮箱加入 **Destination Addresses** 验证。绑定缺失或未配发件人时撰写页会显示指引，收信功能不受影响。
 
 ---
 
+## 🚀 快速开始
 
-基于 Cloudflare Workers 的轻量网页邮箱：用 **Email Routing** 收信，原始 `.eml` 存入 **R2**，同一个 Worker 同时负责前端渲染与邮件解析。没有服务器、没有数据库，全部跑在 Cloudflare 免费额度内。
+### 部署（Dashboard 连接 GitHub，推荐）
 
-**目录**
+**前置条件**：Cloudflare 账号 + 域名托管 + 启用 Email Routing；**先在 Dashboard → R2 点一次同意条款**（否则自动建桶失败）；代码已推送到 GitHub。
 
-- [✉️ 发信功能（v2.4）](#sending)
-- [特性](#特性)
-- [架构](#架构)
-- [项目结构](#项目结构)
-- [部署（Dashboard 连接 GitHub，推荐）](#部署dashboard-连接-github推荐)
-- [应用内配置（部署后无需打开控制台）](#应用内配置部署后无需打开控制台)
-- [正文翻译（Workers AI）](#正文翻译workers-ai)
-- [本地开发](#本地开发)
-- [配置参考](#配置参考)
-- [安全设计](#安全设计)
-- [运维与排查](#运维与排查)
-- [成本](#成本)
-- [已知取舍](#已知取舍)
-- [许可](#许可)
+**Workers & Pages → Create → Workers → Connect to Git**，按下表填写：
+
+| 配置项 | 值 |
+| :--- | :--- |
+| Project name | `cf-webmail-client`（必须与 `wrangler.jsonc` 的 `name` 一致） |
+| Build command | `npm install` |
+| Deploy command | `npx wrangler deploy` |
+
+首次部署自动完成 **R2 建桶 + 绑定**、**Workers AI 绑定**（翻译用）、**send_email 绑定**（发信用）。TRUST 提醒：Dashboard 部署的资源 ID 不会写回仓库，日后改用本地 `wrangler deploy` 前请先把桶名复制进 `wrangler.jsonc`，否则会新建空桶。
+
+**收信路由**：域名管理 → Email → Email Routing → Routes → Create address，Action 选 **Send to a Worker**、Worker 选 `cf-webmail-client`。
+
+**首次访问**：打开 Worker URL，自动跳初始化页，设置管理员账号（密码 ≥ 8 位）即可登录。
+
+### 本地开发
+
+```bash
+npm install
+cp .dev.vars.example .dev.vars
+npm run dev
+```
+
+| 命令 | 作用 |
+| :--- | :--- |
+| `npm test` / `npm run test:send` | 回归测试 / 发信测试（零依赖、不联网、不碰线上数据） |
+| `npm run check` | 离线校验部署配置 |
+| `npm run preview` / `npm run verify:frame` | 登录页视觉对比 / iframe 高度收敛验证 |
+| `npm run deploy` / `npm run tail` / `npm run types` | 部署 / 实时日志 / 生成类型定义 |
 
 ---
 
-## 特性
+## ⚙️ 配置
+
+三种配置都按 **应用内设置 → 环境变量 → 关闭** 三段式回退：老部署用环境变量照常工作，设置页的值会覆盖它。变量在 **Workers & Pages → 设置 → Variables and Secrets** 里配（改后到 Deployments 点 Retry deployment）。
+
+| 变量 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `FORWARD_EMAIL` | Text | 收到邮件后转发到此邮箱；留空 = 不转发 |
+| `SEND_FROM` | Text | 发件人地址，域名须已 onboard；留空则需在应用内填写 |
+| `TURNSTILE_SITE_KEY` | Text | Turnstile Site Key（公开值） |
+| `TURNSTILE_SECRET_KEY` | Secret | Turnstile Secret Key（必须选 Secret 类型） |
+
+> **为什么 `wrangler.jsonc` 里不直接写变量？** 配置文件里的同名变量会覆盖 Dashboard 的值，写空值等于把已配好的真实值清掉；密钥写进仓库等于明文提交。
+
+登录后在 **设置** 页可配置：邮件转发、Turnstile 密钥（**必须成对填写**）、发件人地址、每页数量、自动标已读、修改密码（**轮换会话 token，其它设备立即失效**）、一键退出其它设备。
+
+> Secret Key 永不回显，输入框留空 = 保持原值；非密钥字段留空 = 清空。两个 Key 不完整时验证自动关闭，不会把人锁在门外。
+
+**绑定一览**
+
+| 绑定 | 类型 | 用途 |
+| :--- | :--- | :--- |
+| `MAIL_BUCKET` | R2 桶 | 邮件 `.eml`、设置、计数、译文缓存 |
+| `AI` | Workers AI | 正文翻译 `@cf/meta/m2m100-1.2b` |
+| `EMAIL` | Email Sending | 写邮件 / 回复 `env.EMAIL.send()` |
+
+---
+
+## ✨ 核心能力
 
 | 能力 | 说明 |
-| --- | --- |
-| **写邮件 / 发送 / 回复** | 基于 Workers Free 的 Email Sending（`env.EMAIL.send()`）。免费版只能发给已验证的目标地址，发给已验证地址永久免费、不计配额；已发送邮件自动留档 |
-| **一键部署** | `wrangler.jsonc` 里 R2 只写绑定名、不写桶名 → 首次部署时 Cloudflare **自动创建 R2 桶并自动绑定**，无需手工建资源 |
-| **免控制台点资源** | R2 / Workers AI 绑定全部由配置文件驱动；只有三个可选变量需要在 Dashboard 填一次 |
-| **健壮的 MIME 解析内核** | base64 / quoted-printable、嵌套 multipart、RFC 2047 头部折叠（Header Folding）、**Q 编码里 `_`=空格**的正确还原、RFC 2231 参数值的严格识别、GBK 乱码自动嗅探回退 |
-| **发件人取自 From 头** | 列表发件人不再用信封发件人（envelope MAIL FROM）：Gmail 转发后的 SRS 地址、VERP 退信地址不会再出现在列表里；设置页「显示与阅读」可一键修复历史邮件 |
-| **正文沙箱渲染** | 邮件正文放在**不透明源 iframe** 中并剥离脚本与内联事件，恶意邮件无法触碰你的会话 |
-| **附件流式下载** | 附件不进 HTML，按需从 R2 解码返回；10MB 附件也不会把页面撑爆 |
-| **完整邮件管理** | 收件箱 / 回收站、批量操作、已读未读、侧栏未读计数徽标、PWA 可安装 |
-| **搜索与翻页** | 按**主题 + 发件人**即时过滤；列表分页，「加载更多」按需扩大每页条数。R2 的 `list()` 单次最多返回 1000 个键，代码会跟着 cursor 翻到底，**新邮件不会因为数量超过一页而消失** |
-| **下载原始邮件** | 详情页可一键下载未经任何改写的 `.eml` 原文（`/raw/<key>`），用于取证、留档或导入其它邮件客户端 |
-| **自助改密码** | 设置页可修改管理员密码：重新加盐哈希，并**轮换会话 token** —— 改完其它设备上的登录立即失效 |
-| **正文一键翻译（保留版式）** | 详情页点「翻译」，正文交给 **Workers AI**（m2m100）译成中文。译文是**按 token 就地替换文字**生成的：标签结构、表格、按钮、图片位置一个都不动，所以译文和原文长得一样，切回原文也不会跳 |
-| **应用内配置** | 转发邮箱、Turnstile 密钥全部在网页的「**设置**」页里配，部署后完全不用打开 Cloudflare 控制台 |
-| **可选人机验证** | Turnstile **成对配置才启用**，不配置就自动跳过，不会把人锁在门外 |
+| :--- | :--- |
+| **健壮 MIME 解析** | base64 / quoted-printable、嵌套 multipart、RFC 2047 头部折叠、GBK 乱码嗅探回退 |
+| **正文沙箱渲染** | 不透明源 iframe + 剥离脚本与内联事件，恶意邮件碰不到会话 |
+| **附件流式下载** | 不进 HTML，按需解码返回；10MB 附件也不撑爆页面 |
+| **完整邮件管理** | 收件箱 / 已发送 / 回收站、星标、已读未读、批量操作、PWA 可安装 |
+| **搜索与翻页** | 按主题 + 发件人过滤；R2 `list()` 跟 cursor 翻到底，新邮件不会因超过一页而消失 |
+| **正文一键翻译** | Workers AI 按 token 就地替换文字，标签 / 表格 / 按钮 / 图片位置一个不动 |
+| **下载原始邮件** | `/raw/<key>` 一键下载未经改写的 `.eml`，用于留档或取证 |
 | **登录防护** | 加盐口令哈希、常量时间比对、按 IP 限流、服务端会话过期 |
-| **可观测性** | 开启 `observability` + `upload_source_maps`，日志堆栈可直接映射到源码行号 |
 
----
-
-## 架构
+**架构**
 
 ```
-发件人
-  │  SMTP
-  ▼
-Cloudflare Email Routing ──(Send to a Worker)──▶  Worker.email()
-                                                      │  原始 .eml
-                                                      ▼
-                                                 ┌──────────┐
-                                                 │    R2    │  env.MAIL_BUCKET
-                                                 └──────────┘
-                                                      ▲
-浏览器 ── HTTPS ──▶ Worker.fetch() ────────────────────┘
-                      │
-                      ├─ /                        收件箱列表
-                      ├─ /email/<key>             邮件详情（正文走 iframe）
-                      ├─ /frame/<key>             沙箱化正文文档
-                      ├─ /attachment/<key>/<n>    附件流式下载
-                      ├─ /raw/<key>               原始 .eml 下载（message/rfc822）
-                      ├─ /trash /delete /restore /purge /batch-action
-                      └─ /login /logout /setup /settings /api/check
+发件人 ──SMTP──▶ Email Routing ──▶ Worker.email() ──▶ R2
+                                                       ▲
+浏览器 ──HTTPS──▶ Worker.fetch() ───────────────────────┘
+                    ├─ /                    收件箱列表
+                    ├─ /sent /trash         已发送 / 回收站
+                    ├─ /email /frame        邮件详情（正文走 iframe）
+                    ├─ /attachment /raw     附件 / 原文下载
+                    ├─ /compose /api/send   撰写 / 发送
+                    └─ /login /settings     登录 / 设置
 ```
 
 **R2 键名约定**
 
 | 键 | 用途 |
-| --- | --- |
-| `sys_config.json` | 管理员账号（加盐哈希）、会话 token 与过期时间 |
-| `_sys/settings.json` | 应用内设置（转发邮箱、Turnstile 密钥） |
-| `<时间戳>_<发件人长度>_<发件人><主题>.eml` | 收件箱邮件（原始 MIME 全文）。**入库时**已把 RFC 2047 编码的头解码为明文；发件人用长度前缀界定，因此发件人里含 `_` 也不会串位 |
-| `trash/<原键名>` | 回收站中的邮件 |
-| `_sys/latest.json` | 最新一封邮件的时间戳。`/api/check` 轮询直接读它，不再每次全量列举（没有这个标记时自动回退到列举，所以老数据也能用） |
-| `_sys/trans/<哈希>.html` | 整篇译文的缓存（哈希取自邮件键名，去掉 `trash/` 前缀，收件箱与回收站共用一份）。来回切换原文/译文直接命中，不重复计费；彻底删除邮件时一并清理 |
-| `_sys/login_fail_<ip>` | 登录限流计数（内部键，永不进列表） |
+| :--- | :--- |
+| `sys_config.json` | 管理员账号（加盐哈希）、会话 token |
+| `_sys/settings.json` | 应用内设置 |
+| `<时间戳>_<发件人长度>_<发件人><主题>.eml` | 收件箱邮件，入库时已解码头部 |
+| `sent/<键名>` / `trash/<键名>` | 已发送 / 回收站邮件 |
+| `_sys/counts.json` / `_sys/latest.json` | 计数缓存 / 最新邮件时间戳 |
+| `_sys/trans/<哈希>.html` | 整篇译文缓存 |
 
-> **历史数据兼容**：老版本用的是 `<时间戳>_<发件人>_<主题>.eml`，且写键名前会把 `?` 等字符清洗成 `_`，
-> 导致 RFC 2047 编码词被破坏。新版解析旧键名时会先把编码词按已知结构拼回去再解码
-> （`=_UTF-8_Q_xxx_=` → `=?UTF-8?Q?xxx?=`），所以**已入库的老邮件不需要重投就能正常显示**。
+> 老版本 `<时间戳>_<发件人>_<主题>.eml` 的键名会被自动抢救解码，**已入库老邮件无需重投即可正常显示**。
 
 ---
 
-## 项目结构
+## 🌐 正文翻译（Workers AI）
 
-| 文件 | 说明 |
-| --- | --- |
-| `workers.js` | 全部业务代码：前端页面 + 邮件接收 + MIME 解析 + 路由（单文件 Worker） |
-| `tests/sending.test.mjs` | **零依赖**发信回归测试：桩 R2 + 桩 `EMAIL.send()` + 桩 ctx，端到端覆盖撰写页、发送成功、`.eml` 留档、计数、已发送列表 / 详情、回复预填、错误码翻译、参数校验、彻底删除。运行 `node tests/sending.test.mjs` |
-| `tests/regression.test.mjs` | **零依赖**回归测试：桩 R2 + 桩 Workers AI + 直接调 `fetch` / `email()`，**78 条用例**覆盖登录、鉴权、XSS、沙箱、附件、批量操作、正文翻译、设置页、改密码与会话轮换、列表分页与搜索、时区显示、`/raw` 下载、邮件入库与键名还原、历史数据抢救、正文高度回报 |
-| `tools/render-preview.mjs` | 把初始化页与登录页渲染成静态 HTML，生成 `.preview/compare.html` 左右对比（`npm run preview`） |
-| `tools/verify-frame-height.mjs` | 用无头 Chrome 验证正文 iframe 高度自适应**不会陷入正反馈**（`npm run verify:frame`）。Node 里没有布局引擎，这类布局 bug 只能真跑浏览器才测得出来 |
-| `wrangler.jsonc` | 部署配置。**R2 自动创建 + 自动绑定**，并绑定 Workers AI |
-| `package.json` / `package-lock.json` | 依赖与脚本，锁文件保证构建可复现 |
-| `.dev.vars.example` | 本地开发变量模板（复制为 `.dev.vars`） |
-| `.github/workflows/ci.yml` | CI：语法检查 + 回归测试 + 离线校验部署配置 + iframe 高度收敛验证 |
-| `LICENSE` | MIT |
+详情页「翻译」按钮把正文译成中文，再点切回原文。核心设计是**就地替换文字，不改动版式**：正文切成标签与文本 token，标签原样保留，只翻译文本节点并按原位置填回。原文与译文共用同一个 iframe，切换只改 `src`，元素位置不动。
+
+- **模型**：`@cf/meta/m2m100-1.2b`，只翻译、不生成内容；支持英 / 中 / 法 / 西 / 阿拉伯 / 俄 / 德 / 日 / 葡 / 印地语。
+- **源语言识别**：显式传 `source_lang`（模型默认英文），按字符集 + 高频虚词轻量判断。
+- **预算**：单次最多 48 次 AI 调用、4 路并发，超出预算的片段保留原文并如实告知。
+- **缓存**：整篇译文存 R2，来回切换不重复计费；彻底删除邮件时一并清理。
+- **成本**：$0.342 / 百万 token（输入输出同价），只在点翻译时产生。免费版每天 10,000 Neurons，个人用量远低于此。
+- **隐私**：推理跑在你自己账号的 Cloudflare 基础设施内，不经第三方。不想用可删掉 `ai` 绑定，其余功能不受影响。
 
 ---
 
-## 部署（Dashboard 连接 GitHub，推荐）
+## 🔒 安全设计
 
-### 前置条件
+| 风险 | 处理 |
+| :--- | :--- |
+| 邮件内容 XSS | 发件人 / 主题 / 附件名统一 `escapeHtml()` 后渲染 |
+| 点击行 XSS | 键名放 `data-key` + 事件委托，绝不拼进 `onclick` |
+| 正文脚本执行 | 不透明源 iframe + CSP `sandbox`，额外剥离 `<script>` 与内联 `on*` |
+| 附件类型混淆 | `text/html` / `image/svg+xml` 等一律降级为 `application/octet-stream` |
+| 口令存储与比对 | 加盐 SHA-256 + 常量时间 `safeEqual` |
+| 暴力破解 | 按 IP 限流：15 分钟内失败 8 次 → 锁定 10 分钟 |
+| 会话 | 32 字节 token、`HttpOnly` + `Secure` + `SameSite=Lax`、服务端 30 天过期 |
+| 会话轮换 | 改密码 / 退出其它设备时轮换 token，旧 cookie 当场作废 |
+| 开放重定向 | 回跳目标白名单校验（只接受 `/` 与 `/trash`） |
+| 信息泄漏 | 异常只写日志不回显；全站 `no-store` + `noindex` |
 
-1. 一个 Cloudflare 账号，域名已托管在 Cloudflare（DNS 生效）。
-2. 该域名已启用 **Email Routing**。
-3. **先开通 R2**：Dashboard → **R2** → 点一次同意条款。
-   > ⚠️ 这是最关键的一步。账号没开通 R2 时，自动创建桶会直接失败 —— 这是部署失败最常见的原因。
-4. 代码已推送到你的 GitHub 仓库。
-
-### 步骤一：创建 Worker 项目
-
-**Workers & Pages** → **Create** → **Workers** → **Connect to Git** → 选择仓库，然后按下表填写：
-
-| 配置项 | 值 |
-| --- | --- |
-| **Project name** | `cf-webmail-client` ← **必须与 `wrangler.jsonc` 里的 `name` 完全一致** |
-| **Build command** | `npm install` |
-| **Deploy command** | `npx wrangler deploy` |
-
-点 **Deploy**。首次部署会自动发生两件事：
-
-- **R2 自动创建 + 自动绑定**：`wrangler.jsonc` 里 R2 只有 `"binding": "MAIL_BUCKET"`、没有 `bucket_name`，Cloudflare 会自动建桶（以 Worker 名为前缀命名，具体名称以 Dashboard 为准）并绑定到 `env.MAIL_BUCKET`。**不需要手动建桶，也不需要改代码。**
-- **Workers AI 自动绑定**：`"ai": { "binding": "AI" }` 绑定为 `env.AI`，无需创建资源。
-  用于**正文翻译**功能（详见 [正文翻译](#正文翻译workes-ai)）。绑定本身不产生费用，只有真正调用模型才按量计费。
-
-> ⚠️ **通过 Dashboard 部署时，自动创建出来的资源 ID 不会写回你的 GitHub 仓库**，只能在 Dashboard 查看。
-> 若以后想改用本地 `wrangler deploy`，请先把桶名/ID 从 Dashboard 复制进 `wrangler.jsonc`，
-> 否则 wrangler 会当成「没有绑定」再创建一套新资源 —— 你会以为线上邮件全丢了。
-
-### 步骤二：配置变量与密钥（二选一）
-
-**方式 A（推荐）：用网页里的「设置」页**
-登录后点侧边栏（或收件箱右上角齿轮）进入 **设置**，填好保存即可，**不需要打开 Cloudflare 控制台**。
-详见下一节 [应用内配置](#应用内配置部署后无需打开控制台)。
-
-**方式 B：用 Cloudflare Dashboard 的环境变量**
-Dashboard → **Workers & Pages** → `cf-webmail-client` → **Settings** → **Variables and Secrets**：
-
-| 名称 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `FORWARD_EMAIL` | Text | 否 | 收到邮件后自动转发到这个邮箱；留空 = 不转发 |
-| `TURNSTILE_SITE_KEY` | Text | 否 | Turnstile 的 Site Key（公开值） |
-| `TURNSTILE_SECRET_KEY` | **Secret** | 否 | Turnstile 的 Secret Key（密钥，必须选 Secret 类型） |
-
-保存后如未生效，到 **Deployments** 点一次 **Retry deployment**。
-
-> **为什么 `wrangler.jsonc` 里没有直接写这三个变量？**
-> 因为配置文件里出现过的变量会**覆盖** Dashboard 上的同名变量：写空值或假占位值，
-> 等于把你已经配好的真实值清掉（转发失效、验证码永远过不去）。
-> 而且 `TURNSTILE_SECRET_KEY` 是密钥，写进仓库等于明文提交到 Git。
-
-### 步骤三：把邮件路由到 Worker
-
-域名管理页 → **Email** → **Email Routing** → **Routes** → **Create address**：
-
-- **Custom address**：如 `inbox`
-- **Domain**：你的域名
-- **Action**：**Send to a Worker**
-- **Worker**：`cf-webmail-client`
-
-保存后，所有发往 `inbox@yourdomain.com` 的邮件都会触发 `export default { async email(...) }`，原始邮件写入 R2。
-
-### 步骤四：首次访问与初始化
-
-1. 打开 Worker URL（`https://cf-webmail-client.<你的子域>.workers.dev/`）。
-2. R2 中还没有配置文件，Worker 会自动跳到**初始化页面**。
-3. 设置管理员用户名和密码（**密码至少 8 位**），点「完成设置并登录」。
-4. 之后用该账号登录即可。
-
-### 部署检查清单
-
-- [ ] 账号已开通 R2（Dashboard → R2 能看到桶列表）
-- [ ] 域名已启用 Email Routing
-- [ ] Workers 项目的 Project name 与 `wrangler.jsonc` 的 `name` 一致
-- [ ] Deploy command 是 `npx wrangler deploy`
-- [ ] 首次部署日志里没有 R2 相关报错
-- [ ] Email Routing 里已建好指向该 Worker 的地址
-- [ ] 已完成管理员初始化并能成功登录
+> `Response.redirect()` 只接受绝对 URL，全站统一 `Response.redirect(url.origin + '/xxx', 302)`。不要用 `Referer` 回跳 —— 本站 `Referrer-Policy: no-referrer`，浏览器不发它。
 
 ---
 
-## 应用内配置（部署后无需打开控制台）
+## 💰 成本
 
-登录后进入 **设置** 页（侧边栏「设置」，或收件箱右上角的齿轮图标），可以配置：
-
-| 配置项 | 说明 |
-| --- | --- |
-| **邮件转发** | 邮件存入 R2 成功后自动转发一份；留空 = 不转发。**改完即刻生效** |
-| **Turnstile Site Key / Secret Key** | 两个 Key **必须成对填写**，只填一个会直接报错并拒绝保存 |
-| **管理员密码** | 修改登录密码：需先验证当前密码，新密码不得少于 8 位、两次输入须一致、且不能与旧密码相同。成功后**重新加盐**并轮换会话，其它设备上的登录立即失效 |
-
-### 取值优先级
-
-三个配置都按 **应用内设置 → 环境变量 → 关闭** 三段式回退：
-
-```
-应用内设置（R2）──有值──▶ 生效
-      │
-      └──无值──▶ Dashboard 环境变量 ──有值──▶ 生效
-                        │
-                        └──无值──▶ 关闭（例如验证码自动跳过）
-```
-
-所以**已经用环境变量配好的老部署不会因为这次升级而失效**；而设置页里的值会覆盖环境变量。
-设置页右上角的徽章会明确标出当前生效来源（`应用内已配置` / `来自环境变量` / `未配置`）。
-
-### 几个设计细节
-
-- **Secret Key 永不回显**：页面只显示掩码（如 `SUPERS••••••••1234`）。
-  因此该输入框**留空 = 保持原值不变**；想清空请用页面底部的「清空 Turnstile 密钥」（需点两次确认）。
-  非密钥字段（转发邮箱、Site Key）会回显当前值，所以**留空 = 清空**。
-- **成对校验**：Site Key 与 Secret Key 只填一个会返回 `400` 并拒绝保存，避免「以为配好了、实际永远过不去」。
-- **不会把人锁死**：两个 Key 不完整时验证直接关闭，登录页也不渲染组件。
-- **生效时机**：Site Key 是服务端渲染进登录页的，保存后**下次打开登录页**生效。
-- **存储位置与取舍**：配置存在 R2 的 `_sys/settings.json`。
-  Cloudflare 的**环境变量 Secret 是加密存储**的，而 **R2 的值不是** ——
-  放进 R2 换来「免控制台配置」，代价是失去静态加密。
-  如果你更看重加密存储，就继续用方式 B（环境变量）；设置页清空密钥后会自动回退到环境变量。
-
-> 本项目是单管理员应用，登录后即是管理员，因此设置页没有额外的权限层。
-> 若你要改成多用户，记得给 `/settings` 加一道管理员校验。
+全部在免费额度内：**Workers** 每天 10 万次请求 · **Email Routing** 收信免费不限量 · **R2** 10GB 存储 + 每月 100 万次 A 类操作且出网免费 · **Email Sending** 发给已验证地址永久免费 · **Workers AI** 仅翻译时按量计费。
 
 ---
 
-## 正文翻译（Workers AI）
+## ⚖️ 已知取舍
 
-邮件详情页右上角的「**翻译**」按钮会把正文译成中文，再点一下切回原文。
-
-**核心设计：就地替换文字，不改动版式**
-
-早期版本是把正文压成纯文本、整段翻译后铺进一个 `<div>` —— 译文和原文版式毫无关系，段落、表格、按钮、图片位置全变，一按「翻译」就找不到刚才看的地方。
-
-现在的做法是「按 token 就地替换」：
-
-1. 把正文切成**标签**与**文本**两类 token，标签原样保留、一个都不动；
-2. 只把可翻译的文本节点送去翻译；
-3. 译文按**原位置**填回对应的文本节点。
-
-因为标签结构、行内样式、表格布局完全没变，译文渲染出来的版式与原文一致。
-
-前端也配合这一点：原文与译文共用**同一个 `iframe` 元素**，切换时只改 `src`（`/frame/<key>` ↔ `/frame/<key>?t=1`），不隐藏、不替换节点 —— 元素位置、宽度、父容器结构都不会变。
-
-**实现要点**
-
-| 项 | 说明 |
-| --- | --- |
-| 模型 | `@cf/meta/m2m100-1.2b` —— 多对多翻译模型，**只做翻译、不生成新内容**，不会像对话模型那样擅自总结或加料 |
-| 接口 | `env.AI.run('@cf/meta/m2m100-1.2b', { text, source_lang, target_lang })` → `{ translated_text }` |
-| 支持语种 | 英 / 中 / 法 / 西 / 阿拉伯 / 俄 / 德 / 日 / 葡 / 印地语（模型固定支持这 10 种） |
-| 源语言识别 | **必须显式传 `source_lang`**，因为模型默认 `english`。代码按字符集（汉字/假名/谚文/西里尔/阿拉伯/天城文）+ 拉丁语系高频虚词做一次轻量识别 |
-| 文本切分 | 跳过 `script` / `style` / `head` / `title` 等不可见内容；纯数字、纯符号（`|` `·`）、纯空白片段不翻译，避免把排版装饰翻坏 |
-| 实体处理 | 翻译前把 `&amp;` `&nbsp;` `&#x4e2d;` 还原成字符，翻译后统一转义回去 —— 否则模型会把实体当成单词翻掉 |
-| 逐段翻译 | **刻意不做「多片段拼成一批」**。试过把多个片段用换行拼起来一次翻完再按行拆回，但 m2m100 是句级 seq2seq 模型，对多行输入**不保证保留行数**；行数一旦对不上，为防错位就只能整批作废 —— 而普通邮件的片段往往正好全部落进同一批，等于整篇一个字都翻不出来。现在逐片段翻译，不依赖模型保留任何结构 |
-| 去重与预算 | 同文片段（营销邮件里重复的按钮文字）只翻一次再回填给所有副本；单次请求最多 48 次 AI 调用、4 路并发（Workers 单次调用最多 6 条并发出站连接，要给 R2 留余量）。超出预算的片段保持原文并在状态条如实告知 |
-| 译文缓存 | 整篇译文存到 `_sys/trans/<哈希>.html`。来回切换原文/译文直接命中缓存，不重复计费；彻底删除邮件时一并清理 |
-
-**几种情况会明确告诉你原因，而不是硬翻出一堆乱码：**
-
-- 邮件本来就是中文 → 「这封邮件本来就是中文，无需翻译」
-- 语种不在支持列表（如韩文）→ 「翻译模型暂不支持该语言」
-- 没绑定 Workers AI → 提示去检查 `wrangler.jsonc` 的 `ai` 绑定
-- 模型调用失败 → **按原因分类提示**：「Workers AI 额度可能已用尽或触发限流…」「Workers AI 绑定或模型不可用…」，其余情况原样透出错误原文（堆栈只进日志，不回显）。`describeTranslateFailure()` 负责这一步
-- 直接访问 `/frame/<key>?t=1` 但翻不了 → **静默退回原文**，绝不让 iframe 空着
-
-**成本与隐私**
-
-- 计费：$0.342 / 百万输入 token + $0.342 / 百万输出 token，**只在你点「翻译」时产生**。
-  Workers 免费版每天有 10,000 Neurons 额度，个人收发邮件的翻译量通常远低于此。
-- 隐私：译文由 Cloudflare 的 Workers AI 推理，**跑在你自己账号的基础设施内**，不经第三方。
-  若你完全不希望正文离开 Cloudflare，把 `wrangler.jsonc` 里的 `ai` 绑定删掉即可 ——
-  翻译按钮会给出「未绑定 Workers AI」的提示，其余功能不受影响。
+- **Tailwind 走 CDN**：省掉构建步骤，代价是首屏多一个外部请求。
+- **配置存在 R2**：换来免控制台配置，代价是密钥失去 Cloudflare 的静态加密；更看重加密就用环境变量。
+- **邮件靠键名解析**：发件人用长度前缀界定、`_` 不会串位；极端字符只影响列表文字，正文与附件不受影响。
+- **翻译逐片段调用**：保留版式的代价是短片段缺上下文、纯数字符号被跳过；单次有 48 次调用预算。
+- **`/raw` 下载的是入库原文**：恶意邮件的原始脚本会随文件下载，请用文本编辑器或邮件客户端打开，不要在浏览器渲染。
+- **正文 iframe 允许脚本**：为让「高度自适应」脚本生效；沙箱是不透明源，邮件脚本拿不到 Cookie / DOM / localStorage。
 
 ---
 
-## 本地开发
-
-```bash
-npm install
-cp .dev.vars.example .dev.vars   # 填入本地测试用的变量
-npm run dev                      # 本地跑，自动创建本地 R2（存在 .wrangler/，不影响线上）
-```
-
-其他脚本：
-
-| 命令 | 作用 |
-| --- | --- |
-| `npm test` | 跑回归测试（**零依赖、不联网、不碰线上数据**） |
-| `npm run preview` | 渲染初始化页 / 登录页到 `.preview/compare.html`，左右对比视觉效果 |
-| `npm run verify:frame` | 用无头 Chrome 验证正文 iframe 高度自适应会收敛（需要本机有 Chrome / Edge / Chromium，没有则自动跳过） |
-| `npm run check` | **离线**校验部署配置（不需要登录、不需要账号） |
-| `npm run deploy` | 本地 CLI 部署（会把你创建的资源 ID 写回配置） |
-| `npm run tail` | 实时查看线上日志 |
-| `npm run types` | 生成 `worker-configuration.d.ts`，让编辑器识别 `env` 上的绑定 |
-
-`npm run check` 的正常输出：
-
-```
-Your Worker has access to the following bindings:
-Binding                 Resource
-env.MAIL_BUCKET         R2 Bucket
-env.AI                  AI
-```
-
----
-
-## 配置参考
-
-### 绑定
-
-| 绑定 | 类型 | 来源 | 代码中的用法 |
-| --- | --- | --- | --- |
-| `MAIL_BUCKET` | R2 桶 | `wrangler.jsonc` 自动创建 | `env.MAIL_BUCKET` |
-| `AI` | Workers AI | `wrangler.jsonc` 自动绑定 | `env.AI`（用于正文翻译） |
-| `EMAIL` | Email Sending | `wrangler.jsonc` 的 `send_email` 自动绑定 | `env.EMAIL.send()`（用于写邮件 / 回复） |
-
-### 变量
-
-| 变量 | 类型 | 默认行为 | 代码中的用法 |
-| --- | --- | --- | --- |
-| `FORWARD_EMAIL` | 文本 | 未设置 → 不转发 | 存库成功后调用 `message.forward()` |
-| `SEND_FROM` | 文本 | 未设置 → 需在应用内「发件设置」填写 | `env.EMAIL.send()` 的 `from`，域名须已 onboard |
-| `TURNSTILE_SITE_KEY` | 文本 | 未设置 → 登录页不渲染验证码 | 注入登录页 `data-sitekey` |
-| `TURNSTILE_SECRET_KEY` | 密钥 | 未设置 → 跳过服务端校验 | 调 Turnstile `siteverify` |
-
-**只有两个 Turnstile 变量同时存在时验证才会启用**（`siteKey && secretKey`）。
-只填一个属于半配置：服务端会直接跳过校验，登录页也不渲染组件 —— 不会把人锁死。
-
-每个配置的取值都按 **应用内设置 → 环境变量 → 关闭** 三段式回退，详见 [应用内配置](#应用内配置部署后无需打开控制台)。
-
----
-
-## 安全设计
-
-| 风险 | 处理方式 |
-| --- | --- |
-| **邮件内容 XSS** | 主题、发件人、附件名等完全由发件人控制，渲染前统一 `escapeHtml()` |
-| **点击行 XSS** | 不再把键名拼进 `onclick` 字符串（`encodeURIComponent` **不转义单引号**），改为 `data-key` + 事件委托 |
-| **正文脚本执行** | 正文在不透明源 iframe 中渲染（`sandbox` 属性 + CSP `sandbox`），并额外剥离 `<script>` 与内联 `on*` 事件 |
-| **剥离提示** | 只有当正文里**确实**含有脚本 / 内联事件 / `javascript:` URL 时，才在正文下方给出一行说明。普通邮件不留任何多余文字 —— 常驻一句「已剥离脚本」对 99% 的邮件毫无信息量，而且「已被剥离」的措辞容易被读成「邮件坏了」 |
-| **附件类型混淆** | `text/html` / `image/svg+xml` 等危险 MIME 一律降级为 `application/octet-stream` + `Content-Disposition: attachment` |
-| **口令存储** | 加盐 SHA-256（每账号 16 字节随机盐），并兼容早期无盐数据 |
-| **口令比对** | 常量时间 `safeEqual`，避免逐字符提前返回泄漏前缀信息 |
-| **暴力破解** | 按 `CF-Connecting-IP` 限流：15 分钟窗口内失败 8 次 → 锁定 10 分钟（**锁定期间即使口令正确也拒绝**） |
-| **会话** | 32 字节随机 token、`HttpOnly` + `Secure` + `SameSite=Lax`、服务端校验 30 天过期 |
-| **会话轮换** | 改密码成功后立刻重新生成 `sessionToken` 并下发新 Cookie，旧 token 当场作废 —— 密码一改，其它设备上的登录立即失效（若只是把新密码写进库里、token 不变，那么已经登录的人继续有效，改密码就形同虚设） |
-| **信息泄漏** | 未捕获异常只写日志，不把堆栈回显给客户端；页面统一 `no-store` + `noindex` |
-| **搜索引擎收录** | 全站 `X-Robots-Tag: noindex`，并提供 `robots.txt` 拒绝抓取 |
-| **点击劫持** | 页面响应带 `X-Frame-Options: DENY`（正文 iframe 单独用 `SAMEORIGIN`） |
-| **开放重定向** | 批量操作的回跳目标由表单 `next` 字段给出，并**白名单校验**（只接受 `/` 与 `/trash`），不接受任意 URL |
-| **脚本块注入** | 键名会内联进详情页的 `<script>`，因此统一经 `jsonForScript()` 转义 `<` `>` `&` 与行分隔符，防止邮件主题里的 `</script>` 提前闭合脚本块 |
-| **译文注入** | 译文只作为**文本节点**写回原位，统一经 `escapeHtml()` 转义；标签结构完全来自原邮件、不经模型输出，因此模型不可能借译文注入标签或脚本 |
-| **正文高度回报** | 子页面只回报**内容容器**的高度，父页面**原样采用**（不加固定增量）。iframe 高度会决定它内部视口的高度，而 `documentElement.scrollHeight` 被视口高度托底 —— 两者一旦互相喂大就是无限空白（详见「运维与排查」） |
-
-> **重定向约定**：`Response.redirect()` 只接受**绝对 URL**，传相对路径会抛 `TypeError`。
-> 因此全站统一写成 `Response.redirect(url.origin + '/xxx', 302)`，并在测试里加了静态断言防止回归。
-> 另外不要把 `Referer` 当回跳依据 —— 本站带 `Referrer-Policy: no-referrer`，浏览器根本不会发它。
-
----
-
-
-
-## 成本
-
-全部在 Cloudflare 免费额度内：
-
-- **Workers**：免费版每天 10 万次请求
-- **Email Routing**：接收邮件免费，不限量
-- **R2**：10 GB 存储 + 每月 100 万次 A 类操作免费，且**出网流量免费**
-- **Workers AI**：绑定本身免费，只有点「翻译」时按量计费（$0.342/百万 token 输入输出同价）。
-  免费版每天 10,000 Neurons 额度，个人用量通常远低于此
-
----
-
-
-## 许可
+## 📄 许可
 
 [MIT](LICENSE)
